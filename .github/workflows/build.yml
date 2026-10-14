@@ -21,7 +21,17 @@ jobs:
         uses: ammaraskar/msvc-problem-matcher@master
 
       - name: Build Release (Win32)
-        run: msbuild /m /v:minimal /p:Configuration=Release /p:Platform=Win32 build/gta4-rtx.sln
+        shell: pwsh
+        run: |
+          Get-ChildItem build -Filter *.sln | ForEach-Object { Write-Host "solution: $($_.Name)" }
+          msbuild /m /v:minimal /p:Configuration=Release /p:Platform=Win32 build/gta4-rtx.sln *>&1 | Tee-Object -FilePath build.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            # The runner's raw logs aren't reachable from the build assistant, so surface errors as annotations.
+            Select-String -Path build.log -Pattern ' error |error [A-Z]+[0-9]+|fatal error' |
+              Select-Object -First 40 | ForEach-Object { Write-Host "::error::$($_.Line.Trim())" }
+            exit $code
+          }
 
       - name: Upload a_gta4-rtx.asi
         uses: actions/upload-artifact@v4
