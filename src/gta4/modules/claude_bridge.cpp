@@ -4,6 +4,7 @@
 #include "claude_bridge.hpp"
 #include "d3d9_stats.hpp"
 #include "xform_cache.hpp"
+#include "dedupe_device.hpp"
 #include "natives.hpp"
 #include "remix_vars.hpp"
 
@@ -256,6 +257,18 @@ namespace gta4
 			char xb[96]; sprintf_s(xb, ",\"xform_skipped\":%llu,\"xform_cache\":%s", xform_cache::g_skipped.exchange(0),
 				xform_cache::g_enabled.load() ? "true" : "false");
 			j += xb;
+			{
+				static const char* dn[] = { "rs", "ss", "tss", "tex", "vb", "ib", "shader", "decl", "xform", "const" };
+				std::uint64_t tot = 0; std::string dj = ",\"dedupe\":{\"on\":"; dj += dedupe_device::g_enabled.load() ? "true" : "false";
+				dj += ",\"stateblocks\":"; dj += dedupe_device::g_saw_state_blocks.load() ? "true" : "false";
+				for (int k = 0; k < dedupe_device::S_COUNT; ++k)
+				{
+					const auto v = dedupe_device::g_skipped[k].exchange(0); tot += v;
+					dj += ",\""; dj += dn[k]; dj += "\":" + std::to_string(v);
+				}
+				dj += ",\"total\":" + std::to_string(tot) + "}";
+				j += dj;
+			}
 			j += ",\"d3d\":" + d3d9_stats::take_json(wall);
 			last = now; last_frame = m_frame;
 		}
@@ -279,6 +292,7 @@ namespace gta4
 
 		// A/B switches for the bridge-traffic optimisations
 		if (cmd == "xform_cache") { xform_cache::g_enabled = i(c, "on", 1) != 0; xform_cache::invalidate(); reply(c, true, ""); return true; }
+		if (cmd == "dedupe") { dedupe_device::g_enabled = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 		if (cmd == "d3d_stats") { d3d9_stats::g_enabled = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 
 		if (cmd == "teleport")

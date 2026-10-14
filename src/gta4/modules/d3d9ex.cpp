@@ -5,6 +5,7 @@
 #include "renderer.hpp"
 #include "d3d9_stats.hpp"
 #include "xform_cache.hpp"
+#include "dedupe_device.hpp"
 #include "remix_vars.hpp"
 #include "shared/common/shader_cache.hpp"
 
@@ -868,6 +869,9 @@ namespace gta4
 	{
 		HRESULT hres = m_pIDirect3D9->CreateDevice(Adapter, DeviceType, hFocusWindow, BehaviorFlags, pPresentationParameters, ppReturnedDeviceInterface);
 		shared::common::log("d3d9", "m_pIDirect3D9->CreateDevice", shared::common::LOG_TYPE::LOG_TYPE_DEFAULT, false);
+		if (SUCCEEDED(hres) && *ppReturnedDeviceInterface) {
+			*ppReturnedDeviceInterface = new dedupe_device(*ppReturnedDeviceInterface); // drop redundant state before the Remix bridge
+		}
 		*ppReturnedDeviceInterface = new d3d9ex::D3D9Device(*ppReturnedDeviceInterface);
 		shared::globals::d3d_device = *ppReturnedDeviceInterface;
 
@@ -975,6 +979,9 @@ namespace gta4
 		HRESULT hres = m_pIDirect3D9Ex->CreateDevice(Adapter, DeviceType, hFocusWindow, BehaviorFlags, pPresentationParameters, ppReturnedDeviceInterface);
 		shared::common::log("d3d9", "m_pIDirect3D9Ex->CreateDevice", shared::common::LOG_TYPE::LOG_TYPE_DEFAULT, false);
 
+		if (SUCCEEDED(hres) && *ppReturnedDeviceInterface) {
+			*ppReturnedDeviceInterface = new dedupe_device(*ppReturnedDeviceInterface); // drop redundant state before the Remix bridge
+		}
 		*ppReturnedDeviceInterface = new d3d9ex::D3D9Device(*ppReturnedDeviceInterface);
 		shared::globals::d3d_device = *ppReturnedDeviceInterface;
 
