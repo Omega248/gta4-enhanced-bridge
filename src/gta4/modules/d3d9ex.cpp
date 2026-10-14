@@ -3,6 +3,7 @@
 
 #include "imgui.hpp"
 #include "renderer.hpp"
+#include "d3d9_stats.hpp"
 #include "remix_vars.hpp"
 #include "shared/common/shader_cache.hpp"
 
@@ -145,6 +146,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::CreateTexture);
 		//if (Pool == D3DPOOL_MANAGED) { Pool = D3DPOOL_DEFAULT; Usage |= D3DUSAGE_DYNAMIC; }
 
 		return m_pIDirect3DDevice9->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
@@ -166,6 +168,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::CreateVertexBuffer(UINT Length, DWORD Usage, DWORD FVF, D3DPOOL Pool, IDirect3DVertexBuffer9** ppVertexBuffer, HANDLE* pSharedHandle)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::CreateVertexBuffer);
 		//if (Pool == D3DPOOL_MANAGED) { Pool = D3DPOOL_DEFAULT; Usage |= D3DUSAGE_DYNAMIC; }
 
 		return m_pIDirect3DDevice9->CreateVertexBuffer(Length, Usage, FVF, Pool, ppVertexBuffer, pSharedHandle);
@@ -173,6 +176,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::CreateIndexBuffer(UINT Length, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DIndexBuffer9** ppIndexBuffer, HANDLE* pSharedHandle)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::CreateIndexBuffer);
 		//if (Pool == D3DPOOL_MANAGED) { Pool = D3DPOOL_DEFAULT; Usage |= D3DUSAGE_DYNAMIC; }
 
 		return m_pIDirect3DDevice9->CreateIndexBuffer(Length, Usage, Format, Pool, ppIndexBuffer, pSharedHandle);
@@ -190,16 +194,19 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::UpdateSurface(IDirect3DSurface9* pSourceSurface, CONST RECT* pSourceRect, IDirect3DSurface9* pDestinationSurface, CONST POINT* pDestPoint)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::UpdateSurface);
 		return m_pIDirect3DDevice9->UpdateSurface(pSourceSurface, pSourceRect, pDestinationSurface, pDestPoint);
 	}
 
 	HRESULT d3d9ex::D3D9Device::UpdateTexture(IDirect3DBaseTexture9* pSourceTexture, IDirect3DBaseTexture9* pDestinationTexture)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::UpdateTexture);
 		return m_pIDirect3DDevice9->UpdateTexture(pSourceTexture, pDestinationTexture);
 	}
 
 	HRESULT d3d9ex::D3D9Device::GetRenderTargetData(IDirect3DSurface9* pRenderTarget, IDirect3DSurface9* pDestSurface)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::GetRenderTargetData);
 		return m_pIDirect3DDevice9->GetRenderTargetData(pRenderTarget, pDestSurface);
 	}
 
@@ -210,6 +217,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::StretchRect(IDirect3DSurface9* pSourceSurface, CONST RECT* pSourceRect, IDirect3DSurface9* pDestSurface, CONST RECT* pDestRect, D3DTEXTUREFILTERTYPE Filter)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::StretchRect);
 		return m_pIDirect3DDevice9->StretchRect(pSourceSurface, pSourceRect, pDestSurface, pDestRect, Filter);
 	}
 
@@ -227,6 +235,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9* pRenderTarget)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetRenderTarget);
 		return m_pIDirect3DDevice9->SetRenderTarget(RenderTargetIndex, pRenderTarget);
 	}
 
@@ -237,6 +246,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetDepthStencilSurface(IDirect3DSurface9* pNewZStencil)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetDepthStencilSurface);
 		return m_pIDirect3DDevice9->SetDepthStencilSurface(pNewZStencil);
 	}
 
@@ -247,6 +257,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::BeginScene()
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::BeginScene);
 		if (const auto p = performance_logger::get(); p) {
 			p->begin_frame();
 		}
@@ -260,6 +271,8 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::EndScene()
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::EndScene);
+		d3d9_stats::g_frames.fetch_add(1, std::memory_order_relaxed);
 		if (imgui::is_initialized()) {
 			imgui::get()->on_present();
 		}
@@ -301,6 +314,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::Clear(DWORD Count, CONST D3DRECT* pRects, DWORD Flags, D3DCOLOR Color, float Z, DWORD Stencil)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::Clear);
 		g_is_rendering_phone = shared::utils::float_equal(Z, 0.1337f);
 
 		if (g_is_rendering_phone) 
@@ -330,11 +344,13 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetTransform(D3DTRANSFORMSTATETYPE State, CONST D3DMATRIX* pMatrix)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetTransform);
 		return m_pIDirect3DDevice9->SetTransform(State, pMatrix);
 	}
 
 	HRESULT d3d9ex::D3D9Device::GetTransform(D3DTRANSFORMSTATETYPE State, D3DMATRIX* pMatrix)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::GetTransform);
 		return m_pIDirect3DDevice9->GetTransform(State, pMatrix);
 	}
 
@@ -345,6 +361,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetViewport(CONST D3DVIEWPORT9* pViewport)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetViewport);
 		return m_pIDirect3DDevice9->SetViewport(pViewport);
 	}
 
@@ -395,11 +412,13 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetRenderState(D3DRENDERSTATETYPE State, DWORD Value)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetRenderState);
 		return m_pIDirect3DDevice9->SetRenderState(State, Value);
 	}
 
 	HRESULT d3d9ex::D3D9Device::GetRenderState(D3DRENDERSTATETYPE State, DWORD* pValue)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::GetRenderState);
 		return m_pIDirect3DDevice9->GetRenderState(State, pValue);
 	}
 
@@ -430,11 +449,13 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::GetTexture(DWORD Stage, IDirect3DBaseTexture9** ppTexture)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::GetTexture);
 		return m_pIDirect3DDevice9->GetTexture(Stage, ppTexture);
 	}
 
 	HRESULT d3d9ex::D3D9Device::SetTexture(DWORD Stage, IDirect3DBaseTexture9* pTexture)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetTexture);
 		return m_pIDirect3DDevice9->SetTexture(Stage, pTexture);  
 	}
 
@@ -445,6 +466,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetTextureStageState(DWORD Stage, D3DTEXTURESTAGESTATETYPE Type, DWORD Value)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetTextureStageState);
 		return m_pIDirect3DDevice9->SetTextureStageState(Stage, Type, Value);
 	}
 
@@ -455,6 +477,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetSamplerState(DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD Value)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetSamplerState);
 		return m_pIDirect3DDevice9->SetSamplerState(Sampler, Type, Value);
 	}
 
@@ -485,6 +508,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetScissorRect(CONST RECT* pRect)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetScissorRect);
 		return m_pIDirect3DDevice9->SetScissorRect(pRect);
 	}
 
@@ -515,6 +539,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::DrawPrimitive([[maybe_unused]] D3DPRIMITIVETYPE PrimitiveType, [[maybe_unused]] UINT StartVertex, [[maybe_unused]] UINT PrimitiveCount)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::DrawPrimitive);
 		//return D3D_OK;
 		//auto hr = m_pIDirect3DDevice9->DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount);
 
@@ -524,12 +549,15 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::DrawIndexedPrimitive(D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::DrawIndexedPrimitive);
+		d3d9_stats::g_draw_prims.fetch_add(primCount, std::memory_order_relaxed);
 		const auto hr = renderer::get()->on_draw_indexed_prim(m_pIDirect3DDevice9, PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
 		return hr;
 	}
 
 	HRESULT d3d9ex::D3D9Device::DrawPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::DrawPrimitiveUP);
 		//return D3D_OK;
 		//pre_drawindexedprim();
 		const auto hr = m_pIDirect3DDevice9->DrawPrimitiveUP(PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride);
@@ -547,6 +575,7 @@ namespace gta4
 		[[maybe_unused]] CONST void* pVertexStreamZeroData,
 		[[maybe_unused]] UINT VertexStreamZeroStride)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::DrawIndexedPrimitiveUP);
 		//return D3D_OK;
 		return m_pIDirect3DDevice9->DrawIndexedPrimitiveUP(PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount, pIndexData, IndexDataFormat, pVertexStreamZeroData, VertexStreamZeroStride);
 	}
@@ -563,6 +592,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetVertexDeclaration(IDirect3DVertexDeclaration9* pDecl)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetVertexDeclaration);
 		return m_pIDirect3DDevice9->SetVertexDeclaration(pDecl);
 	}
 
@@ -573,6 +603,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetFVF(DWORD FVF)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetFVF);
 		return m_pIDirect3DDevice9->SetFVF(FVF);
 	}
 
@@ -588,6 +619,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetVertexShader(IDirect3DVertexShader9* pShader)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetVertexShader);
 		return m_pIDirect3DDevice9->SetVertexShader(pShader);
 	}
 
@@ -598,6 +630,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetVertexShaderConstantF(UINT StartRegister, CONST float* pConstantData, UINT Vector4fCount)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetVertexShaderConstantF);
 		return m_pIDirect3DDevice9->SetVertexShaderConstantF(StartRegister, pConstantData, Vector4fCount);
 	}
 
@@ -608,6 +641,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetVertexShaderConstantI(UINT StartRegister, CONST int* pConstantData, UINT Vector4iCount)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetVertexShaderConstantI);
 		return m_pIDirect3DDevice9->SetVertexShaderConstantI(StartRegister, pConstantData, Vector4iCount);
 	}
 
@@ -618,6 +652,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetVertexShaderConstantB(UINT StartRegister, CONST BOOL* pConstantData, UINT  BoolCount)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetVertexShaderConstantB);
 		return m_pIDirect3DDevice9->SetVertexShaderConstantB(StartRegister, pConstantData, BoolCount);
 	}
 
@@ -628,6 +663,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetStreamSource(UINT StreamNumber, IDirect3DVertexBuffer9* pStreamData, UINT OffsetInBytes, UINT Stride)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetStreamSource);
 		return m_pIDirect3DDevice9->SetStreamSource(StreamNumber, pStreamData, OffsetInBytes, Stride);
 	}
 
@@ -638,6 +674,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetStreamSourceFreq(UINT StreamNumber, UINT Divider)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetStreamSourceFreq);
 		return m_pIDirect3DDevice9->SetStreamSourceFreq(StreamNumber, Divider);
 	}
 
@@ -648,6 +685,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetIndices(IDirect3DIndexBuffer9* pIndexData)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetIndices);
 		return m_pIDirect3DDevice9->SetIndices(pIndexData);
 	}
 
@@ -663,6 +701,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetPixelShader(IDirect3DPixelShader9* pShader)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetPixelShader);
 		return m_pIDirect3DDevice9->SetPixelShader(pShader);
 	}
 
@@ -673,6 +712,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetPixelShaderConstantF(UINT StartRegister, CONST float* pConstantData, UINT Vector4fCount)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetPixelShaderConstantF);
 		return m_pIDirect3DDevice9->SetPixelShaderConstantF(StartRegister, pConstantData, Vector4fCount);
 	}
 
@@ -683,6 +723,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetPixelShaderConstantI(UINT StartRegister, CONST int* pConstantData, UINT Vector4iCount)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetPixelShaderConstantI);
 		return m_pIDirect3DDevice9->SetPixelShaderConstantI(StartRegister, pConstantData, Vector4iCount);
 	}
 
@@ -693,6 +734,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::SetPixelShaderConstantB(UINT StartRegister, CONST BOOL* pConstantData, UINT  BoolCount)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::SetPixelShaderConstantB);
 		return m_pIDirect3DDevice9->SetPixelShaderConstantB(StartRegister, pConstantData, BoolCount);
 	}
 
@@ -718,6 +760,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::CreateQuery(D3DQUERYTYPE Type, IDirect3DQuery9** ppQuery)
 	{
+		d3d9_stats::scope _gta4_stat(d3d9_stats::CreateQuery);
 		//shared::common::log("d3d9", "m_pIDirect3DDevice9->CreateQuery", shared::common::LOG_TYPE::LOG_TYPE_DEFAULT, false);
 		return m_pIDirect3DDevice9->CreateQuery(Type, ppQuery);
 	}

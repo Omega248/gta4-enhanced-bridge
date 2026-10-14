@@ -1,7 +1,8 @@
-#include "std_include.hpp"
+﻿#include "std_include.hpp"
 #include <deque>
 #include <shlobj.h>
 #include "claude_bridge.hpp"
+#include "d3d9_stats.hpp"
 #include "natives.hpp"
 #include "remix_vars.hpp"
 
@@ -242,6 +243,17 @@ namespace gta4
 			sprintf_s(buf, ",\"pos\":[%.2f,%.2f,%.2f],\"heading\":%.1f,\"health\":%u,\"in_car\":%s", x, y, z, hd, health, n->IsCharInAnyCar(ped) ? "true" : "false");
 			j += buf;
 			j += ",\"zone\":\"" + json_escape(zone ? zone : "") + "\"";
+		}
+		{
+			// per-frame D3D9 / bridge statistics since the last status write
+			static std::uint64_t last = d3d9_stats::now_ticks();
+			const std::uint64_t now = d3d9_stats::now_ticks();
+			static std::uint32_t last_frame = m_frame;
+			const double wall = d3d9_stats::ticks_to_ms(now - last);
+			char gb[64]; sprintf_s(gb, ",\"game_fps\":%.1f", wall > 0 ? (m_frame - last_frame) * 1000.0 / wall : 0.0);
+			j += gb;
+			j += ",\"d3d\":" + d3d9_stats::take_json(wall);
+			last = now; last_frame = m_frame;
 		}
 		j += "}\n";
 		write_atomic(m_dir / "status.json", j);
