@@ -48,19 +48,6 @@ namespace gta4::d3d9_stats
 	// render-thread timeline: BeginScene->EndScene (issuing the frame) vs EndScene->next BeginScene (Present + waits)
 	inline std::atomic<std::uint64_t> g_t_begin{ 0 }, g_t_end{ 0 };
 	inline std::atomic<std::uint64_t> g_busy_ticks{ 0 }, g_gap_ticks{ 0 }, g_gap_max{ 0 };
-	inline void on_begin_scene()
-	{
-		const auto t = now_ticks(); const auto e = g_t_end.load(std::memory_order_relaxed);
-		if (e) { const auto g = t - e; g_gap_ticks.fetch_add(g, std::memory_order_relaxed); if (g > g_gap_max.load()) g_gap_max = g; }
-		g_t_begin = t;
-	}
-	inline void on_end_scene()
-	{
-		const auto t = now_ticks(); const auto b = g_t_begin.load(std::memory_order_relaxed);
-		if (b) g_busy_ticks.fetch_add(t - b, std::memory_order_relaxed);
-		g_t_end = t;
-	}
-
 	inline std::uint64_t now_ticks()
 	{
 		LARGE_INTEGER t; QueryPerformanceCounter(&t);
@@ -71,6 +58,19 @@ namespace gta4::d3d9_stats
 	{
 		static const double inv = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return 1000.0 / static_cast<double>(f.QuadPart); }();
 		return static_cast<double>(t) * inv;
+	}
+
+	inline void on_begin_scene()
+	{
+		const auto t = now_ticks(); const auto e = g_t_end.load(std::memory_order_relaxed);
+		if (e) { const auto g = t - e; g_gap_ticks.fetch_add(g, std::memory_order_relaxed); if (g > g_gap_max.load()) g_gap_max.store(g); }
+		g_t_begin.store(t);
+	}
+	inline void on_end_scene()
+	{
+		const auto t = now_ticks(); const auto b = g_t_begin.load(std::memory_order_relaxed);
+		if (b) g_busy_ticks.fetch_add(t - b, std::memory_order_relaxed);
+		g_t_end.store(t);
 	}
 
 	struct scope
