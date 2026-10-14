@@ -283,7 +283,22 @@ namespace gta4
 					n->SetCharCoordinates(ped, x, y, z);
 					if (has(c, "heading")) n->SetCharHeading(ped, f(c, "heading"));
 				}
-				c.step = 1; c.wait_frames = 30;   // let streaming catch up before reporting
+				if (i(c, "ground", 0)) n->FreezeCharPosition(ped, true);   // hold still while the area streams in
+				c.step = 1; c.wait_frames = i(c, "ground", 0) ? 120 : 30;   // let streaming catch up
+				return false;
+			}
+			if (c.step == 1 && i(c, "ground", 0))
+			{
+				// snap to the ground once the area has streamed in (lets callers pass rough x/y only)
+				float gz = 0.0f;
+				n->GetGroundZFor3dCoord(x, y, 1000.0f, &gz);
+				if (gz != 0.0f)
+				{
+					if (n->IsCharInAnyCar(ped)) { natives::Vehicle car = 0; n->GetCarCharIsUsing(ped, &car); n->SetCarCoordinates(car, x, y, gz + 1.0f); }
+					else { n->SetCharCoordinates(ped, x, y, gz + 1.0f); }
+				}
+				n->FreezeCharPosition(ped, false);
+				c.step = 2; c.wait_frames = 10;
 				return false;
 			}
 			float px, py, pz; n->GetCharCoordinates(ped, &px, &py, &pz);
