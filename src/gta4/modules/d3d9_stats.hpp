@@ -45,6 +45,21 @@ namespace gta4::d3d9_stats
 	inline std::atomic<std::uint64_t> g_frames{ 0 };     // EndScene calls
 	inline std::atomic<std::uint64_t> g_draw_prims{ 0 }; // primitives submitted
 	inline std::atomic<bool> g_enabled{ true };
+	// render-thread timeline: BeginScene->EndScene (issuing the frame) vs EndScene->next BeginScene (Present + waits)
+	inline std::atomic<std::uint64_t> g_t_begin{ 0 }, g_t_end{ 0 };
+	inline std::atomic<std::uint64_t> g_busy_ticks{ 0 }, g_gap_ticks{ 0 }, g_gap_max{ 0 };
+	inline void on_begin_scene()
+	{
+		const auto t = now_ticks(); const auto e = g_t_end.load(std::memory_order_relaxed);
+		if (e) { const auto g = t - e; g_gap_ticks.fetch_add(g, std::memory_order_relaxed); if (g > g_gap_max.load()) g_gap_max = g; }
+		g_t_begin = t;
+	}
+	inline void on_end_scene()
+	{
+		const auto t = now_ticks(); const auto b = g_t_begin.load(std::memory_order_relaxed);
+		if (b) g_busy_ticks.fetch_add(t - b, std::memory_order_relaxed);
+		g_t_end = t;
+	}
 
 	inline std::uint64_t now_ticks()
 	{
@@ -84,10 +99,15 @@ namespace gta4::d3d9_stats
 			total_ticks += t[i];
 		}
 		const double f = frames ? static_cast<double>(frames) : 1.0;
+		const double busy = ticks_to_ms(g_busy_ticks.exchange(0)) / (frames ? frames : 1);
+		const double gap = ticks_to_ms(g_gap_ticks.exchange(0)) / (frames ? frames : 1);
+		const double gapmax = ticks_to_ms(g_gap_max.exchange(0));
 		char buf[256];
-		sprintf_s(buf, "{\"frames\":%llu,\"fps\":%.1f,\"wall_ms\":%.0f,\"calls_per_frame\":%.0f,\"prims_per_frame\":%.0f,\"d3d_ms_per_frame\":%.2f,\"top\":[",
+		sprintf_s(buf, "{\"scene_ms\":%.2f,\"between_scenes_ms\":%.2f,\"between_max_ms\":%.1f,", busy, gap, gapmax);
+		std::string head = buf;
+		sprintf_s(buf, "\"frames\":%llu,\"fps\":%.1f,\"wall_ms\":%.0f,\"calls_per_frame\":%.0f,\"prims_per_frame\":%.0f,\"d3d_ms_per_frame\":%.2f,\"top\":[",
 			frames, wall_ms > 0 ? frames * 1000.0 / wall_ms : 0.0, wall_ms, total_calls / f, prims / f, ticks_to_ms(total_ticks) / f);
-		std::string j = buf;
+		std::string j = head + buf;
 
 		// top 12 by time
 		int order[COUNT]; for (int i = 0; i < COUNT; ++i) order[i] = i;

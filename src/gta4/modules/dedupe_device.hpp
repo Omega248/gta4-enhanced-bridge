@@ -22,7 +22,7 @@ namespace gta4
 	public:
 		enum stat : int { S_RS, S_SS, S_TSS, S_TEX, S_VB, S_IB, S_SH, S_DECL, S_XF, S_CONST, S_COUNT };
 		static inline std::atomic<std::uint64_t> g_skipped[S_COUNT];
-		static inline std::atomic<bool> g_enabled{ true };
+		static inline std::atomic<bool> g_enabled{ false }; // off by default: no measured FPS gain and the game uses state blocks
 		static inline std::atomic<bool> g_saw_state_blocks{ false };
 
 		explicit dedupe_device(IDirect3DDevice9* real) : m_real(real) { invalidate(); }

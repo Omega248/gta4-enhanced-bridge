@@ -265,6 +265,7 @@ namespace gta4
 			p->begin_frame();
 		}
 
+		d3d9_stats::on_begin_scene();
 		xform_cache::invalidate();
 		if (renderer::is_initialized()) {
 			on_begin_scene_cb();
@@ -313,6 +314,7 @@ namespace gta4
 			p->end_frame(shared::globals::frame_time_ms);
 		}
 
+		d3d9_stats::on_end_scene();
 		return hr;
 	}
 
