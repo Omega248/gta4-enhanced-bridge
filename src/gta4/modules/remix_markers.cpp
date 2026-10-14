@@ -1,4 +1,5 @@
-#include "std_include.hpp"
+﻿#include "std_include.hpp"
+#include "xform_cache.hpp"
 #include "remix_markers.hpp"
 
 #include "comp_settings.hpp"
@@ -42,7 +43,7 @@ namespace gta4
 		// set remix texture hash ~req. dxvk-runtime changes - not really needed
 		renderer->set_remix_texture_hash(dev, shared::utils::fnv::hash("marker", index));
 
-		dev->SetTransform(D3DTS_WORLD, &world);
+		xform_cache::set(dev, D3DTS_WORLD, &world);
 		dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, mesh_verts, sizeof(vertex));
 	}
 
@@ -113,7 +114,7 @@ namespace gta4
 			dev->SetTexture(0, og_tex);
 			renderer::dc_ctx.restore_render_state(dev, (D3DRENDERSTATETYPE)150);
 			dev->SetFVF(NULL);
-			dev->SetTransform(D3DTS_WORLD, &shared::globals::IDENTITY);
+			xform_cache::set(dev, D3DTS_WORLD, &shared::globals::IDENTITY);
 		}
 	}
 
@@ -213,7 +214,7 @@ namespace gta4
 		dev->SetTexture(0, og_tex);
 		renderer::dc_ctx.restore_render_state(dev, (D3DRENDERSTATETYPE)150);
 		dev->SetFVF(NULL);
-		dev->SetTransform(D3DTS_WORLD, &shared::globals::IDENTITY);
+		xform_cache::set(dev, D3DTS_WORLD, &shared::globals::IDENTITY);
 	}
 
 	remix_markers::remix_markers()

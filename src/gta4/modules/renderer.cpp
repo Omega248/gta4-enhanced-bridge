@@ -1,4 +1,5 @@
-#include "std_include.hpp"
+﻿#include "std_include.hpp"
+#include "xform_cache.hpp"
 #include "renderer.hpp"
 
 #include "comp_settings.hpp"
@@ -1488,7 +1489,7 @@ namespace gta4
 		bool disable_vertex_colors = false;
 
 		// fixes the skylight
-		dev->SetTransform(D3DTS_WORLD, &shared::globals::IDENTITY);
+		xform_cache::set(dev, D3DTS_WORLD, &shared::globals::IDENTITY);
 
 		if (g_is_rendering_mirror)
 		{
@@ -1504,8 +1505,8 @@ namespace gta4
 		if (viewport && viewport->wp)
 		{
 			//dev->SetTransform(D3DTS_WORLD, &viewport->wp->world);
-			dev->SetTransform(D3DTS_VIEW, &viewport->wp->view);
-			dev->SetTransform(D3DTS_PROJECTION, &viewport->wp->proj);
+			xform_cache::set(dev, D3DTS_VIEW, &viewport->wp->view);
+			xform_cache::set(dev, D3DTS_PROJECTION, &viewport->wp->proj);
 
 			// automatically tag sky surfs as sky
 			// + custom sky texture because sky and traffic lights share the same texture
@@ -1553,7 +1554,7 @@ namespace gta4
 					newWorld.m[3][2] += im->m_debug_mtx02.m[3][2];
 					newWorld.m[3][3] += im->m_debug_mtx02.m[3][3];*/
 
-					dev->SetTransform(D3DTS_WORLD, &newWorld);
+					xform_cache::set(dev, D3DTS_WORLD, &newWorld);
 				}
 
 				set_remix_texture_categories(dev, InstanceCategories::Sky); 
@@ -1567,7 +1568,7 @@ namespace gta4
 			// rendering water via FF is fine and safes a ton of performance
 			else if (g_is_water_rendering)
 			{
-				dev->SetTransform(D3DTS_WORLD, &viewport->wp->world);
+				xform_cache::set(dev, D3DTS_WORLD, &viewport->wp->world);
 				ctx.save_rs(dev, D3DRS_ALPHABLENDENABLE);
 				dev->SetRenderState(D3DRS_ALPHABLENDENABLE, 0);
 				render_with_ff = true;
@@ -1669,7 +1670,7 @@ namespace gta4
 				//ctx.modifiers.do_not_render = true;
 				//shared::utils::lookat_vertex_decl(dev);
 
-				/*dev->SetTransform(D3DTS_WORLD, &viewport->wp->world); 
+				/*xform_cache::set(dev, D3DTS_WORLD, &viewport->wp->world); 
 				D3DMATRIX matrix = viewport->wp->proj;
 				matrix.m[0][0] += im->m_debug_mtx02.m[0][0]; 
 				matrix.m[0][1] += im->m_debug_mtx02.m[0][1];
@@ -1692,7 +1693,7 @@ namespace gta4
 				matrix.m[3][3] += im->m_debug_mtx02.m[3][3];
 			
 				render_with_ff = false;
-				dev->SetTransform(D3DTS_PROJECTION, &matrix);*/
+				xform_cache::set(dev, D3DTS_PROJECTION, &matrix);*/
 			}
 
 
@@ -1824,8 +1825,8 @@ namespace gta4
 				/*const auto viewport = game::pCurrentViewport;
 				if (viewport && viewport->wp)
 				{
-					dev->SetTransform(D3DTS_VIEW, &viewport->wp->view);
-					dev->SetTransform(D3DTS_PROJECTION, &viewport->wp->proj);
+					xform_cache::set(dev, D3DTS_VIEW, &viewport->wp->view);
+					xform_cache::set(dev, D3DTS_PROJECTION, &viewport->wp->proj);
 				}
 
 				return dev->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);*/
@@ -1846,7 +1847,7 @@ namespace gta4
 			const auto viewport = game::pCurrentViewport;
 
 			// make VS use the correct matrix (if Use World Transforms is enabled in remix)
-			dev->SetTransform(D3DTS_WORLD, game::pCurrentWorldTransform);
+			xform_cache::set(dev, D3DTS_WORLD, game::pCurrentWorldTransform);
 
 			if (static auto debug_model_hash = shared::common::flags::has_flag("debug_model_hash"); debug_model_hash)
 			{
@@ -1861,8 +1862,8 @@ namespace gta4
 
 			if (viewport && viewport->wp)
 			{
-				dev->SetTransform(D3DTS_VIEW, &viewport->wp->view);
-				dev->SetTransform(D3DTS_PROJECTION, &viewport->wp->proj);
+				xform_cache::set(dev, D3DTS_VIEW, &viewport->wp->view);
+				xform_cache::set(dev, D3DTS_PROJECTION, &viewport->wp->proj);
 			}
 
 			// true if none of the below checks were true
@@ -2474,7 +2475,7 @@ namespace gta4
 					matrix.m[3][2] = ((-viewport->wp->nearclip * viewport->wp->farclip) / (viewport->wp->farclip - viewport->wp->nearclip)) + im->m_dbg_phone_projection_matrix_offset.m[3][2];
 					matrix.m[3][3] = 0.01f + im->m_dbg_phone_projection_matrix_offset.m[3][3] + 0.07f;*/
 
-					dev->SetTransform(D3DTS_PROJECTION, &matrix);
+					xform_cache::set(dev, D3DTS_PROJECTION, &matrix);
 
 					if (gs->phone_emissive_override.get_as<bool>())
 					{
@@ -2503,7 +2504,7 @@ namespace gta4
 							v.m[3][1] += im->m_debug_mtx03.m[3][1];
 							v.m[3][2] += im->m_debug_mtx03.m[3][2];
 							v.m[3][3] += im->m_debug_mtx03.m[3][3];
-							dev->SetTransform(D3DTS_VIEW, &v);
+							xform_cache::set(dev, D3DTS_VIEW, &v);
 						}
 
 						D3DMATRIX w = *game::pCurrentWorldTransform;
@@ -2531,7 +2532,7 @@ namespace gta4
 						w.m[3][1] += im->m_debug_mtx02.m[3][1];
 						w.m[3][2] += im->m_debug_mtx02.m[3][2];
 						w.m[3][3] += im->m_debug_mtx02.m[3][3];
-						dev->SetTransform(D3DTS_WORLD, &w);
+						xform_cache::set(dev, D3DTS_WORLD, &w);
 					}*/
 				}
 			}
@@ -2996,7 +2997,7 @@ namespace gta4
 				mat.m[0][0] = 0.999f;
 				mat.m[1][1] = 0.999f;
 				mat.m[2][2] = 0.999f;
-				dev->SetTransform(D3DTS_WORLD, &mat);
+				xform_cache::set(dev, D3DTS_WORLD, &mat);
 
 				ctx.save_rs(dev, D3DRS_BLENDOP);
 				dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
@@ -3055,7 +3056,7 @@ namespace gta4
 					mat.m[1][1] *= 1.01f;
 					mat.m[2][2] *= 1.01f;
 
-					dev->SetTransform(D3DTS_WORLD, &mat);
+					xform_cache::set(dev, D3DTS_WORLD, &mat);
 
 					//ctx.save_texture(dev, 0);
 					//dev->SetTexture(0, tex_addons::veh_light_ems_glass); 
@@ -3320,7 +3321,7 @@ namespace gta4
 	void reset_world_transform()
 	{
 		const auto& dev = shared::globals::d3d_device;
-		dev->SetTransform(D3DTS_WORLD, &shared::globals::IDENTITY);
+		xform_cache::set(dev, D3DTS_WORLD, &shared::globals::IDENTITY);
 	}
 
 	__declspec (naked) void pre_entity_surfs_stub()

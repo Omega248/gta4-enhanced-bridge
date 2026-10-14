@@ -3,6 +3,7 @@
 #include <shlobj.h>
 #include "claude_bridge.hpp"
 #include "d3d9_stats.hpp"
+#include "xform_cache.hpp"
 #include "natives.hpp"
 #include "remix_vars.hpp"
 
@@ -252,6 +253,9 @@ namespace gta4
 			const double wall = d3d9_stats::ticks_to_ms(now - last);
 			char gb[64]; sprintf_s(gb, ",\"game_fps\":%.1f", wall > 0 ? (m_frame - last_frame) * 1000.0 / wall : 0.0);
 			j += gb;
+			char xb[96]; sprintf_s(xb, ",\"xform_skipped\":%llu,\"xform_cache\":%s", xform_cache::g_skipped.exchange(0),
+				xform_cache::g_enabled.load() ? "true" : "false");
+			j += xb;
 			j += ",\"d3d\":" + d3d9_stats::take_json(wall);
 			last = now; last_frame = m_frame;
 		}
@@ -272,6 +276,10 @@ namespace gta4
 		if (cmd == "ping") { reply(c, true, "\"msg\":\"pong\""); return true; }
 
 		if (cmd == "status") { write_status(); reply(c, true, ""); return true; }
+
+		// A/B switches for the bridge-traffic optimisations
+		if (cmd == "xform_cache") { xform_cache::g_enabled = i(c, "on", 1) != 0; xform_cache::invalidate(); reply(c, true, ""); return true; }
+		if (cmd == "d3d_stats") { d3d9_stats::g_enabled = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 
 		if (cmd == "teleport")
 		{

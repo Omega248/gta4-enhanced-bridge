@@ -1,4 +1,5 @@
 ﻿#include "std_include.hpp"
+#include "xform_cache.hpp"
 
 #include "modules/dinput_hook.hpp"
 #include "modules/game_lights.hpp"
@@ -90,13 +91,13 @@ namespace gta4
 
 		// camera setup
 		{
-			shared::globals::d3d_device->SetTransform(D3DTS_WORLD, &shared::globals::IDENTITY);
+			xform_cache::set(shared::globals::d3d_device, D3DTS_WORLD, &shared::globals::IDENTITY);
 
 			const auto vp = game::pViewports; //reinterpret_cast<game::g_viewports2*>(0x118D7F0);
 			if (vp->sceneviewport)
 			{
-				shared::globals::d3d_device->SetTransform(D3DTS_VIEW, &vp->sceneviewport->view);
-				shared::globals::d3d_device->SetTransform(D3DTS_PROJECTION, &vp->sceneviewport->proj);
+				xform_cache::set(shared::globals::d3d_device, D3DTS_VIEW, &vp->sceneviewport->view);
+				xform_cache::set(shared::globals::d3d_device, D3DTS_PROJECTION, &vp->sceneviewport->proj);
 			}
 		}
 

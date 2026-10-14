@@ -4,6 +4,7 @@
 #include "imgui.hpp"
 #include "renderer.hpp"
 #include "d3d9_stats.hpp"
+#include "xform_cache.hpp"
 #include "remix_vars.hpp"
 #include "shared/common/shader_cache.hpp"
 
@@ -104,6 +105,7 @@ namespace gta4
 
 	HRESULT d3d9ex::D3D9Device::Reset(D3DPRESENT_PARAMETERS* pPresentationParameters)
 	{
+		xform_cache::invalidate();
 		shared::common::g_shader_cache.clear_cache();
 		tex_addons::init_texture_addons(true);
 		ImGui_ImplDX9_InvalidateDeviceObjects();
@@ -262,6 +264,7 @@ namespace gta4
 			p->begin_frame();
 		}
 
+		xform_cache::invalidate();
 		if (renderer::is_initialized()) {
 			on_begin_scene_cb();
 		}
@@ -345,6 +348,7 @@ namespace gta4
 	HRESULT d3d9ex::D3D9Device::SetTransform(D3DTRANSFORMSTATETYPE State, CONST D3DMATRIX* pMatrix)
 	{
 		d3d9_stats::scope _gta4_stat(d3d9_stats::SetTransform);
+		xform_cache::note(State, pMatrix);
 		return m_pIDirect3DDevice9->SetTransform(State, pMatrix);
 	}
 
