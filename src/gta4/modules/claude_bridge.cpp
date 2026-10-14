@@ -114,17 +114,13 @@ namespace gta4
 			return ok;
 		}
 
+		// Remix options must not be changed from the game thread directly - the renderer runs on
+		// another thread. Queue the change; the Comp Mod applies queued values on the render thread.
 		bool set_remix(const std::string& name, const std::string& value)
 		{
-			auto h = remix_vars::get_option(name);
-			if (!h)
-			{
-				const auto o = remix_vars::string_to_option(value);
-				if (o.type == remix_vars::OPTION_TYPE_NONE) return false;
-				h = remix_vars::add_custom_option(name, o);
-				if (!h) return false;
-			}
-			return remix_vars::set_option(h, remix_vars::string_to_option_value(h->second.type, value));
+			const auto h = remix_vars::get_option(name);   // only options listed in rtx.conf
+			if (!h || !remix_vars::get()) return false;
+			return remix_vars::get()->add_queue_entry(h, remix_vars::string_to_option_value(h->second.type, value), 0.0f, true);
 		}
 	}
 
