@@ -17,6 +17,9 @@ jobs:
       - name: Generate project files
         run: tools/premake5 vs2022
 
+      - name: Set up problem matching
+        uses: ammaraskar/msvc-problem-matcher@master
+
       - name: Build Release (Win32)
         run: msbuild /m /v:minimal /p:Configuration=Release /p:Platform=Win32 build/gta4-rtx.sln
 
