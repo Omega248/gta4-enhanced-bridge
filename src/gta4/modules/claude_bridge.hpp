@@ -44,6 +44,8 @@ namespace gta4
 		bool m_ready = false;
 		uint32_t m_frame = 0;
 		int m_cam = 0;
+		struct crawl_pt { float x, y; };
+		std::vector<crawl_pt> m_crawl;                 // grid for the capture crawler
 
 		void init_dirs();
 		void poll_inbox();

@@ -415,6 +415,134 @@ namespace gta4
 			return true;
 		}
 
+		if (cmd == "crawl")
+		{
+			// Capture crawler: visits a grid of points in short hops with Niko hidden and collision
+			// off, waits for each area to stream in, frames it from above and triggers an RTX Remix
+			// capture. The game must be in capture mode (replacement mods parked). Progress is saved
+			// after every point (bridge/crawl_progress.txt) so a restart resumes where it stopped.
+			// Stop early by creating bridge/crawl_stop.
+			// args: x0 x1 y0 y1 step start height settle_s capture_s
+			const auto now = GetTickCount64();
+			const auto elapsed = [&]() { return static_cast<double>(now - std::stoull(s(c, "_t", "0"))) / 1000.0; };
+			const auto mark = [&]() { c.args["_t"] = std::to_string(now); };
+			const auto status = [&](const std::string& st)
+			{
+				char b[256];
+				sprintf_s(b, "{\"index\":%d,\"total\":%zu,\"captured\":%d,\"water_skipped\":%d,\"state\":\"%s\"}\n",
+					i(c, "_idx"), m_crawl.size(), i(c, "_caps"), i(c, "_water"), st.c_str());
+				write_atomic(m_dir / "crawl_status.json", b);
+			};
+
+			if (c.step == 0)
+			{
+				const float x0 = f(c, "x0", -2300.0f), x1 = f(c, "x1", 2600.0f), y0 = f(c, "y0", -1800.0f), y1 = f(c, "y1", 2300.0f);
+				const float st = std::max(50.0f, f(c, "step", 250.0f));
+				m_crawl.clear();
+				// serpentine order keeps every hop short
+				int row = 0;
+				for (float y = y0; y <= y1; y += st, ++row)
+				{
+					std::vector<crawl_pt> r;
+					for (float x = x0; x <= x1; x += st) r.push_back({ x, y });
+					if (row & 1) std::reverse(r.begin(), r.end());
+					m_crawl.insert(m_crawl.end(), r.begin(), r.end());
+				}
+				int start = i(c, "start", -1);
+				if (start < 0)   // resume from saved progress
+				{
+					std::ifstream in(m_dir / "crawl_progress.txt"); int v = 0;
+					start = (in >> v) ? v : 0;
+				}
+				c.args["_idx"] = std::to_string(start); c.args["_caps"] = "0"; c.args["_water"] = "0";
+				n->SetCharInvincible(ped, true); n->SetMaxWantedLevel(0); n->ClearWantedLevel(player);
+				n->DisplayHud(false); n->DisplayRadar(false);
+				n->ForceTimeOfDay(13, 0); n->ForceWeatherNow(1);
+				c.step = 1;
+				return false;
+			}
+
+			int idx = i(c, "_idx");
+			std::error_code ec;
+			const bool stop = std::filesystem::exists(m_dir / "crawl_stop", ec);
+
+			if (c.step == 1)   // hop to the next point
+			{
+				if (idx >= static_cast<int>(m_crawl.size()) || stop)
+				{
+					if (m_cam) { n->SetCamActive(m_cam, false); n->SetCamPropagate(m_cam, false); n->ActivateScriptedCams(false, false); n->DestroyCam(m_cam); m_cam = 0; }
+					n->SetCharVisible(ped, true); n->SetCharCollision(ped, true); n->FreezeCharPosition(ped, false);
+					n->DisplayHud(true); n->DisplayRadar(true); n->ReleaseTimeOfDay(); n->ReleaseWeather();
+					status(stop ? "stopped" : "finished");
+					char b[160];
+					sprintf_s(b, "\"index\":%d,\"total\":%zu,\"captured\":%d,\"stopped\":%s", idx, m_crawl.size(), i(c, "_caps"), stop ? "true" : "false");
+					reply(c, true, b);
+					return true;
+				}
+				const auto& p = m_crawl[idx];
+				n->SetCharVisible(ped, false);
+				n->SetCharCollision(ped, false);
+				n->FreezeCharPosition(ped, true);
+				n->SetCharCoordinatesNoOffset(ped, p.x, p.y, 150.0f);
+				n->RequestCollisionAtPosn(p.x, p.y, 20.0f);
+				n->LoadScene(p.x, p.y, 20.0f);
+				mark(); status("streaming");
+				c.step = 2;
+				return false;
+			}
+
+			if (c.step == 2)   // wait for streaming, check for water, frame the shot
+			{
+				if (elapsed() < f(c, "settle_s", 7.0f)) return false;
+				const auto& p = m_crawl[idx];
+				float gz = 0.0f;
+				n->GetGroundZFor3dCoord(p.x, p.y, 1000.0f, &gz);
+				if (gz <= 0.5f)
+				{
+					c.args["_water"] = std::to_string(i(c, "_water") + 1);
+					c.args["_idx"] = std::to_string(idx + 1);
+					write_atomic(m_dir / "crawl_progress.txt", std::to_string(idx + 1) + "\n");
+					c.step = 1;
+					return false;
+				}
+				n->SetCharCoordinatesNoOffset(ped, p.x, p.y, gz + 1.0f);
+				const float h = f(c, "height", 45.0f);
+				if (!m_cam) { natives::Camera cam = 0; n->CreateCam(14, &cam); m_cam = cam; }
+				n->SetCamPos(m_cam, p.x - h * 0.6f, p.y - h * 0.6f, gz + h);
+				n->PointCamAtCoord(m_cam, p.x, p.y, gz);
+				n->SetCamFov(m_cam, 70.0f);
+				n->SetCamActive(m_cam, true); n->SetCamPropagate(m_cam, true); n->ActivateScriptedCams(true, true);
+				mark(); status("framing");
+				c.step = 3;
+				return false;
+			}
+
+			if (c.step == 3)   // let the image and streaming settle, then capture
+			{
+				if (elapsed() < 4.0) return false;
+				const HWND hwnd = shared::globals::main_window;
+				if (hwnd && GetForegroundWindow() != hwnd)
+				{
+					status("waiting for game window focus");
+					return false;   // retry until the window is focused again
+				}
+				send_chord({ VK_CONTROL, VK_SHIFT, 'Q' });
+				mark(); status("capturing");
+				c.step = 4;
+				return false;
+			}
+
+			if (c.step == 4)   // capture export takes ~30 s
+			{
+				if (elapsed() < f(c, "capture_s", 45.0f)) return false;
+				c.args["_caps"] = std::to_string(i(c, "_caps") + 1);
+				c.args["_idx"] = std::to_string(idx + 1);
+				write_atomic(m_dir / "crawl_progress.txt", std::to_string(idx + 1) + "\n");
+				c.step = 1;
+				return false;
+			}
+		}
+
 		if (cmd == "capture")
 		{
 			// RTX Remix only captures while no replacement mods are loaded. Toggling replacements at
@@ -450,7 +578,7 @@ namespace gta4
 		bool finished = true;
 		try { finished = step_command(c); }
 		catch (...) { reply(c, false, "\"error\":\"exception while running command\""); finished = true; }
-		if (!finished && c.guard > 3600) { reply(c, false, "\"error\":\"timed out\""); finished = true; }
+		if (!finished && c.guard > (s(c, "cmd") == "crawl" ? 100000000 : 3600)) { reply(c, false, "\"error\":\"timed out\""); finished = true; }
 		if (finished) m_queue.pop_front();
 	}
 
