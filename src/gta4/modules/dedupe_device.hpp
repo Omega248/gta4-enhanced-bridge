@@ -385,6 +385,18 @@ namespace gta4
 		HRESULT __stdcall CreateQuery(D3DQUERYTYPE Type, IDirect3DQuery9** ppQuery) override
 		{ return m_real->CreateQuery(Type, ppQuery); }
 
+		void __stdcall SetCursorPosition(int X, int Y, DWORD Flags) override
+		{ m_real->SetCursorPosition(X, Y, Flags); }
+
+		void __stdcall SetGammaRamp(UINT iSwapChain, DWORD Flags, CONST D3DGAMMARAMP* pRamp) override
+		{ m_real->SetGammaRamp(iSwapChain, Flags, pRamp); }
+
+		void __stdcall GetGammaRamp(UINT iSwapChain, D3DGAMMARAMP* pRamp) override
+		{ m_real->GetGammaRamp(iSwapChain, pRamp); }
+
+		float __stdcall GetNPatchMode() override
+		{ return m_real->GetNPatchMode(); }
+
 	private:
 		template <typename K, typename V> struct kv
 		{
