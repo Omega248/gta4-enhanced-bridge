@@ -417,25 +417,22 @@ namespace gta4
 
 		if (cmd == "capture")
 		{
-			// RTX Remix only captures while replacement assets are disabled.
-			// Step 0: disable replacements + skip the capture menu. Step 1: press the capture hotkey.
-			// Step 2: restore everything.
+			// RTX Remix only captures while no replacement mods are loaded. Toggling replacements at
+			// runtime crashes this setup, so the game must be started in capture mode (replacement
+			// mods parked). This command only presses the capture hotkey - it never changes settings.
 			if (c.step == 0)
 			{
-				set_remix("rtx.enableReplacementAssets", "False");
-				set_remix("rtx.captureShowMenuOnHotkey", "False");
-				c.step = 1; c.wait_frames = std::max(30, i(c, "settle_frames", 90));
-				return false;
-			}
-			if (c.step == 1)
-			{
+				const HWND hwnd = shared::globals::main_window;
+				if (hwnd && GetForegroundWindow() != hwnd)
+				{
+					reply(c, false, "\"error\":\"game window is not focused - click into the game\"");
+					return true;
+				}
 				send_chord({ VK_CONTROL, VK_SHIFT, 'Q' });
-				c.step = 2; c.wait_frames = std::max(60, i(c, "capture_frames", 300));
+				c.step = 1; c.wait_frames = std::max(60, i(c, "capture_frames", 240));
 				return false;
 			}
-			set_remix("rtx.captureShowMenuOnHotkey", "True");
-			set_remix("rtx.enableReplacementAssets", "True");
-			reply(c, true, "\"note\":\"capture requested - files appear in <game>\\\\rtx-remix\\\\captures\"");
+			reply(c, true, "\"note\":\"capture hotkey sent - files appear in <game>\\\\rtx-remix\\\\captures\"");
 			return true;
 		}
 
