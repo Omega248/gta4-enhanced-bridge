@@ -538,23 +538,36 @@ namespace gta4
 			}
 		}
 
-		// true = drop this draw (Remix still holds the identical instance from a recent frame)
+		// true = drop this draw (Remix still holds the identical instance from a recent frame).
+		// All inputs are read back from the bridge client's own device state (local, no IPC) so that
+		// state blocks, which change state without passing through this wrapper, cannot fool it.
 		bool retain_skip(INT base, UINT minv, UINT numv, UINT start, UINT prims)
 		{
 			const auto other = [] { g_retain_sent_other.fetch_add(1, std::memory_order_relaxed); return false; };
-			if (m_vs || m_ps || !m_xf[0].valid || !m_vb[0].valid || !m_ib_valid) return other();
-			if (!res_static_vb(m_vb[0].vb) || !res_static_ib(m_ib)) return other();
-			IDirect3DBaseTexture9* t0 = nullptr; IDirect3DBaseTexture9* t1 = nullptr;
-			{ const auto a = m_tex.m.find(0); if (a != m_tex.m.end()) t0 = reinterpret_cast<IDirect3DBaseTexture9*>(a->second); }
-			{ const auto b = m_tex.m.find(1); if (b != m_tex.m.end()) t1 = reinterpret_cast<IDirect3DBaseTexture9*>(b->second); }
-			if (!res_static_tex(t0) || !res_static_tex(t1)) return other();
+			struct rel { IUnknown* p = nullptr; ~rel() { if (p) p->Release(); } };
+
+			IDirect3DVertexShader9* vs = nullptr; m_real->GetVertexShader(&vs); rel r_vs{ vs };
+			IDirect3DPixelShader9* ps = nullptr; m_real->GetPixelShader(&ps); rel r_ps{ ps };
+			if (vs || ps) return other();                                   // shader draws: skinned peds, special effects
+
+			IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0; m_real->GetStreamSource(0, &vb, &off, &stride); rel r_vb{ vb };
+			IDirect3DIndexBuffer9* ib = nullptr; m_real->GetIndices(&ib); rel r_ib{ ib };
+			if (!res_static_vb(vb) || !res_static_ib(ib)) return other();     // dynamic buffers: water, trails, particles
+
+			IDirect3DBaseTexture9* t0 = nullptr; m_real->GetTexture(0, &t0); rel r_t0{ t0 };
+			IDirect3DBaseTexture9* t1 = nullptr; m_real->GetTexture(1, &t1); rel r_t1{ t1 };
+			if (!res_static_tex(t0) || !res_static_tex(t1)) return other();   // render-target or dynamic textures
+
+			D3DMATRIX world{}; if (FAILED(m_real->GetTransform(D3DTS_WORLD, &world))) return other();
+			IDirect3DVertexDeclaration9* decl = nullptr; m_real->GetVertexDeclaration(&decl); rel r_decl{ decl };
+			DWORD fvf = 0; m_real->GetFVF(&fvf);
 
 			std::uint64_t h = 1469598103934665603ull;
-			const void* ptrs[6] = { m_vb[0].vb, m_ib, t0, t1, m_decl_valid ? static_cast<const void*>(m_decl) : nullptr, reinterpret_cast<const void*>(static_cast<std::uintptr_t>(m_fvf_valid ? m_fvf : 0)) };
+			const void* ptrs[6] = { vb, ib, t0, t1, decl, reinterpret_cast<const void*>(static_cast<std::uintptr_t>(fvf)) };
 			h = fnv(h, ptrs, sizeof(ptrs));
-			const UINT nums[8] = { m_vb[0].off, m_vb[0].stride, static_cast<UINT>(base), minv, numv, start, prims, static_cast<UINT>(m_pass) };
+			const UINT nums[8] = { off, stride, static_cast<UINT>(base), minv, numv, start, prims, static_cast<UINT>(m_pass) };
 			h = fnv(h, nums, sizeof(nums));
-			h = fnv(h, &m_xf[0].m, sizeof(D3DMATRIX));
+			h = fnv(h, &world, sizeof(D3DMATRIX));
 
 			auto& e = m_retain[h];
 			if (e.last_frame == m_frame_no) { g_retain_sent_static.fetch_add(1, std::memory_order_relaxed); return false; }   // repeated within a frame: send
