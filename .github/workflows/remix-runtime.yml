@@ -1,0 +1,60 @@
+name: Remix runtime (gta4e)
+
+# Builds xoxor4d's GTA IV Remix runtime (the branch the installed game runs) with our patches from
+# remix-runtime/: an always-on CPU zone profiler (rtx-remix/gta4e_profile.txt) and BLAS/OMM counters.
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'xoxor4d/dxvk-remix branch'
+        default: 'game/gta4_atmos10_nr2'
+  push:
+    branches: [ main ]
+    paths: [ 'remix-runtime/**', '.github/workflows/remix-runtime.yml' ]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 300
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Fetch runtime source
+      shell: pwsh
+      run: |
+        $branch = '${{ github.event.inputs.branch }}'
+        if ([string]::IsNullOrEmpty($branch)) { $branch = 'game/gta4_atmos10_nr2' }
+        git config --global core.longpaths true
+        git clone --depth 1 --recurse-submodules --shallow-submodules -b $branch https://github.com/xoxor4d/dxvk-remix.git remix
+        git -C remix log -1 --format="%H %s"
+
+    - name: Apply gta4e patches
+      shell: pwsh
+      run: |
+        Copy-Item remix-runtime\gta4e_zone_profiler.h remix\src\dxvk\gta4e_zone_profiler.h
+        Get-ChildItem remix-runtime\patches\*.patch | Sort-Object Name | ForEach-Object {
+          Write-Host "applying $($_.Name)"
+          git -C remix apply --whitespace=nowarn --verbose $_.FullName
+          if ($LASTEXITCODE -ne 0) { throw "patch failed: $($_.Name)" }
+        }
+
+    - name: Setup Meson / Ninja
+      run: pip install meson==1.1.0 ninja
+
+    - name: Build release
+      shell: pwsh
+      working-directory: remix
+      run: |
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+        . .\build_common.ps1
+        PerformBuild -BuildFlavour release -BuildSubDir _Comp64Release -Backend ninja -EnableTracy false copy_output
+        Get-ChildItem _output | Format-Table Name, Length
+
+    - name: Upload runtime
+      uses: actions/upload-artifact@v4
+      with:
+        name: gta4e-remix-runtime
+        path: |
+          remix\_output\d3d9.dll
+          remix\_output\d3d9.pdb
+        if-no-files-found: error

@@ -1,0 +1,150 @@
+diff --git a/src/d3d9/d3d9_rtx.cpp b/src/d3d9/d3d9_rtx.cpp
+index 345be38..708433e 100644
+--- a/src/d3d9/d3d9_rtx.cpp
++++ b/src/d3d9/d3d9_rtx.cpp
+@@ -7,6 +7,7 @@
+ #include "d3d9_buffer.h"
+ 
+ #include "d3d9_rtx.h"
++#include "../dxvk/gta4e_zone_profiler.h"
+ #include "d3d9_device.h"
+ 
+ #include "../util/util_fastops.h"
+@@ -727,7 +728,10 @@ namespace dxvk {
+ 
+     // For shader based drawcalls we also want to capture the vertex shader output
+     const bool needVertexCapture = m_parent->UseProgrammableVS() && useVertexCapture();
++    GTA4E_COUNT("draws.raytraced", 1);
+     if (needVertexCapture) {
++      GTA4E_COUNT("draws.vertex_capture", 1);
++      GTA4E_COUNT("draws.vertex_capture_verts", geoData.vertexCount);
+       prepareVertexCapture(vertexIndexOffset);
+     }
+ 
+diff --git a/src/dxvk/dxvk_scoped_annotation.h b/src/dxvk/dxvk_scoped_annotation.h
+index 9a073ee..10f2dd7 100644
+--- a/src/dxvk/dxvk_scoped_annotation.h
++++ b/src/dxvk/dxvk_scoped_annotation.h
+@@ -5,9 +5,11 @@
+ #include "dxvk_include.h"
+ #include "../tracy/Tracy.hpp"
+ #include "../tracy/TracyVulkan.hpp"
++#include "gta4e_zone_profiler.h"
+ 
+ #define ScopedCpuProfileZoneN(name) \
+-        ZoneScopedN(name)
++        ZoneScopedN(name); \
++        GTA4E_ZONE(name)
+ 
+ #define ScopedCpuProfileZone() \
+         ScopedCpuProfileZoneN(__FUNCTION__)
+diff --git a/src/dxvk/rtx_render/rtx_accel_manager.cpp b/src/dxvk/rtx_render/rtx_accel_manager.cpp
+index 90c88be..7de2684 100644
+--- a/src/dxvk/rtx_render/rtx_accel_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_accel_manager.cpp
+@@ -454,6 +454,7 @@ namespace dxvk {
+       const bool sceneUnchanged = (currentGeneration == m_lastProcessedGeneration);
+ 
+       if (sceneUnchanged && !m_ommBindPending && !m_reorderedSurfaces.empty()) {
++        GTA4E_COUNT("accel.fastpath_frames", 1);
+         m_sceneUnchangedThisFrame = true;
+         // Touch pooled (merged) BLAS
+         for (auto& blas : m_blasPool) {
+@@ -492,6 +493,7 @@ namespace dxvk {
+         // If new OMMs were built this frame, force a full scene rebuild next frame
+         // so tryBindOpacityMicromap runs on all instances and the BLASes pick up the new OMMs.
+         if (opacityMicromapManager && opacityMicromapManager->hasNewlyBuiltOmms()) {
++          GTA4E_COUNT("omm.new_omms_force_rebuild_static", 1);
+           m_ommBindPending = true;
+           instanceManager.notifySceneChanged();
+         }
+@@ -512,10 +514,14 @@ namespace dxvk {
+     std::vector<bool> bucketDirty;
+     bool anyBucketDirty = false;
+ 
++    GTA4E_COUNT("accel.incremental_frames", 1);
++    GTA4E_COUNT("accel.instances", instances.size());
++    GTA4E_COUNT("buckets.cached", m_cachedBuckets.size());
+     if (hasValidBucketCache) {
+       // When newly built OMMs need binding, force all buckets dirty so that
+       // tryBindOpacityMicromap runs on every instance's BLAS rebuild.
+       if (m_ommBindPending) {
++        GTA4E_COUNT("buckets.all_dirty_for_omm_bind", 1);
+         bucketDirty.resize(m_cachedBuckets.size(), true);
+         anyBucketDirty = true;
+         m_ommBindPending = false;
+@@ -527,6 +533,7 @@ namespace dxvk {
+           const auto& cachedBucket = m_cachedBuckets[bi];
+ 
+           if (cachedBucket.instances.size() != cachedBucket.instanceCacheIdentities.size()) {
++            GTA4E_COUNT("dirty.reason_size", 1);
+             bucketDirty[bi] = true;
+             anyBucketDirty = true;
+             continue;
+@@ -541,12 +548,14 @@ namespace dxvk {
+             // dereferenced. Mark the bucket dirty so it gets rebuilt without
+             // touching the stale entry.
+             if (currentInstanceSet.find(inst) == currentInstanceSet.end()) {
++              GTA4E_COUNT("dirty.reason_instance_removed", 1);
+               bucketDirty[bi] = true;
+               anyBucketDirty = true;
+               break;
+             }
+ 
+             if (inst->getCacheIdentity() != cachedBucket.instanceCacheIdentities[ii]) {
++              GTA4E_COUNT("dirty.reason_cache_identity", 1);
+               bucketDirty[bi] = true;
+               anyBucketDirty = true;
+               break;
+@@ -564,6 +573,9 @@ namespace dxvk {
+             if (inst->isBlasDirty() ||
+                 inst->getBlas()->frameLastUpdated == currentFrame ||
+                 bucketKeyChanged) {
++              if (inst->isBlasDirty()) GTA4E_COUNT("dirty.reason_instance_blas_dirty", 1);
++              else if (inst->getBlas()->frameLastUpdated == currentFrame) GTA4E_COUNT("dirty.reason_geometry_updated", 1);
++              else GTA4E_COUNT("dirty.reason_bucket_key", 1);
+               bucketDirty[bi] = true;
+               anyBucketDirty = true;
+               break;
+@@ -1031,6 +1043,15 @@ namespace dxvk {
+         "Downstream systems (NEE cache, prefix-sum lookups) may produce incorrect results.")));
+     }
+ 
++    GTA4E_COUNT("buckets.rebuilt", blasBuckets.size());
++    {
++      size_t dirtyCount = 0;
++      for (size_t bi = 0; bi < bucketDirty.size(); ++bi) dirtyCount += bucketDirty[bi] ? 1 : 0;
++      GTA4E_COUNT("buckets.dirty", dirtyCount);
++      size_t mergedInst = 0;
++      for (const auto& b : blasBuckets) mergedInst += b->originalInstances.size();
++      GTA4E_COUNT("buckets.rebuilt_surfaces", mergedInst);
++    }
+     buildBlases(ctx, execBarriers, cameraManager, opacityMicromapManager, instanceManager, 
+                 textures, instances, blasBuckets, blasToBuild, blasRangesToBuild,
+                 instanceTransforms, totalScratchMemory);
+@@ -1038,6 +1059,7 @@ namespace dxvk {
+     // If new OMMs were built this frame, force a full scene rebuild next frame
+     // so tryBindOpacityMicromap runs on all instances and the BLASes pick up the new OMMs.
+     if (opacityMicromapManager && opacityMicromapManager->hasNewlyBuiltOmms()) {
++      GTA4E_COUNT("omm.new_omms_force_rebuild", 1);
+       m_ommBindPending = true;
+       instanceManager.notifySceneChanged();
+     }
+@@ -1833,6 +1855,17 @@ namespace dxvk {
+         blasRangesToBuild,
+         m_transformBuffer != nullptr ? m_transformBuffer->getDeviceAddress() : 0,
+         instanceTransforms);
++      {
++        uint64_t prims = 0;
++        for (size_t i = 0; i < blasToBuild.size(); ++i)
++          for (uint32_t g = 0; g < blasToBuild[i].geometryCount; ++g)
++            prims += blasRangesToBuild[i][g].primitiveCount;
++        GTA4E_COUNT("blas.builds", blasToBuild.size());
++        GTA4E_COUNT("blas.build_prims", prims);
++        uint64_t updates = 0;
++        for (const auto& b : blasToBuild) updates += (b.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR) ? 1 : 0;
++        GTA4E_COUNT("blas.updates", updates);
++      }
+       ctx->vkCmdBuildAccelerationStructuresKHR(blasToBuild.size(), blasToBuild.data(), blasRangesToBuild.data());
+ 
+       execBarriers.accessBuffer(
