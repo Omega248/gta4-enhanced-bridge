@@ -65,13 +65,14 @@ namespace gta4
 		// peds (skinned), moving vehicles, particles and anything new or changed are always sent.
 		static inline std::atomic<bool> g_retain{ false };
 		static inline std::atomic<int> g_retain_k{ 4 };
+		static inline std::atomic<bool> g_retain_shaders{ false };
 		static inline std::atomic<std::uint64_t> g_retain_skipped{ 0 }, g_retain_sent_static{ 0 }, g_retain_sent_other{ 0 };
 		static inline std::atomic<std::uint32_t> g_retain_tracked{ 0 };
 		static std::string retain_json(double frames)
 		{
 			const double f = frames > 0 ? frames : 1.0; char b[200];
-			sprintf_s(b, "{\"on\":%s,\"k\":%d,\"skipped\":%.0f,\"sent_static\":%.0f,\"sent_other\":%.0f,\"tracked\":%u}",
-				g_retain.load() ? "true" : "false", g_retain_k.load(), g_retain_skipped.exchange(0) / f,
+			sprintf_s(b, "{\"on\":%s,\"shaders\":%s,\"k\":%d,\"skipped\":%.0f,\"sent_static\":%.0f,\"sent_other\":%.0f,\"tracked\":%u}",
+				g_retain.load() ? "true" : "false", g_retain_shaders.load() ? "true" : "false", g_retain_k.load(), g_retain_skipped.exchange(0) / f,
 				g_retain_sent_static.exchange(0) / f, g_retain_sent_other.exchange(0) / f, g_retain_tracked.load());
 			return b;
 		}
@@ -553,6 +554,18 @@ namespace gta4
 			D3DINDEXBUFFER_DESC d{}; const bool ok = SUCCEEDED(ib->GetDesc(&d)) && !(d.Usage & D3DUSAGE_DYNAMIC);
 			m_static_res[ib] = ok; return ok;
 		}
+		bool decl_unskinned(IDirect3DVertexDeclaration9* d)
+		{
+			if (!d) return true;
+			const auto it = m_static_res.find(d); if (it != m_static_res.end()) return it->second;
+			D3DVERTEXELEMENT9 el[MAXD3DDECLLENGTH + 1]; UINT n = MAXD3DDECLLENGTH + 1; bool ok = true;
+			if (SUCCEEDED(d->GetDeclaration(el, &n)))
+				for (UINT i = 0; i < n && el[i].Stream != 0xFF; ++i)
+					if (el[i].Usage == D3DDECLUSAGE_BLENDWEIGHT || el[i].Usage == D3DDECLUSAGE_BLENDINDICES) ok = false;
+			if (ok) // a second vertex stream usually carries per-instance or animated data
+				for (UINT i = 0; i < n && el[i].Stream != 0xFF; ++i) if (el[i].Stream != 0) ok = false;
+			m_static_res[d] = ok; return ok;
+		}
 		bool res_static_tex(IDirect3DBaseTexture9* t)
 		{
 			if (!t) return true;
@@ -588,7 +601,9 @@ namespace gta4
 
 			IDirect3DVertexShader9* vs = nullptr; m_real->GetVertexShader(&vs); rel r_vs{ vs };
 			IDirect3DPixelShader9* ps = nullptr; m_real->GetPixelShader(&ps); rel r_ps{ ps };
-			if (vs || ps) return other();                                   // shader draws: skinned peds, special effects
+			// shader draws (every world draw here, vertex capture): only when shader retain is on; the world
+			// transform the compatibility mod sets for Remix identifies the instance. Skinned draws never qualify.
+			if ((vs || ps) && !g_retain_shaders.load(std::memory_order_relaxed)) return other();
 
 			IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0; m_real->GetStreamSource(0, &vb, &off, &stride); rel r_vb{ vb };
 			IDirect3DIndexBuffer9* ib = nullptr; m_real->GetIndices(&ib); rel r_ib{ ib };
@@ -601,9 +616,10 @@ namespace gta4
 			D3DMATRIX world{}; if (FAILED(m_real->GetTransform(D3DTS_WORLD, &world))) return other();
 			IDirect3DVertexDeclaration9* decl = nullptr; m_real->GetVertexDeclaration(&decl); rel r_decl{ decl };
 			DWORD fvf = 0; m_real->GetFVF(&fvf);
+			if (vs && !decl_unskinned(decl)) return other();                 // bone weights: peds, animated props
 
 			std::uint64_t h = 1469598103934665603ull;
-			const void* ptrs[6] = { vb, ib, t0, t1, decl, reinterpret_cast<const void*>(static_cast<std::uintptr_t>(fvf)) };
+			const void* ptrs[8] = { vb, ib, t0, t1, decl, reinterpret_cast<const void*>(static_cast<std::uintptr_t>(fvf)), vs, ps };
 			h = fnv(h, ptrs, sizeof(ptrs));
 			const UINT nums[8] = { off, stride, static_cast<UINT>(base), minv, numv, start, prims, static_cast<UINT>(m_pass) };
 			h = fnv(h, nums, sizeof(nums));

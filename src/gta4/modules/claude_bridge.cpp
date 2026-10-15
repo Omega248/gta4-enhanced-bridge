@@ -356,6 +356,7 @@ namespace gta4
 			// retained static world: on=0/1, k=<send every k-th frame>. Pair with rtx.numFramesToKeepInstances/BLAS > k.
 			if (has(c, "k")) dedupe_device::g_retain_k = std::max(1, std::min(16, i(c, "k", 4)));
 			if (has(c, "on")) dedupe_device::g_retain = i(c, "on", 1) != 0;
+			if (has(c, "shaders")) dedupe_device::g_retain_shaders = i(c, "shaders", 1) != 0;
 			reply(c, true, "\"on\":" + std::string(dedupe_device::g_retain.load() ? "true" : "false") + ",\"k\":" + std::to_string(dedupe_device::g_retain_k.load()));
 			return true;
 		}
