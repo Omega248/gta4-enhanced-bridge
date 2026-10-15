@@ -80,6 +80,7 @@ namespace gta4
 		// cost between the compatibility mod's per-draw work and the bridge/Remix side
 		static inline std::atomic<std::uint64_t> g_bt_draw{ 0 }, g_bt_present{ 0 }, g_bt_set{ 0 };
 		static inline std::atomic<bool> g_bt_on{ true };
+		static inline std::atomic<bool> g_bt_wrap_swapchain{ true };
 		static std::int64_t qpc() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
 		static std::string bridge_time_json(double frames)
 		{
@@ -143,8 +144,31 @@ namespace gta4
 		HRESULT __stdcall CreateAdditionalSwapChain(D3DPRESENT_PARAMETERS* pPresentationParameters, IDirect3DSwapChain9** pSwapChain) override
 		{ return m_real->CreateAdditionalSwapChain(pPresentationParameters, pSwapChain); }
 
+		// the game presents through the swap chain: hand out a thin wrapper that times Present
+		struct timed_swapchain final : IDirect3DSwapChain9
+		{
+			IDirect3DSwapChain9* r; IDirect3DDevice9* dev; ULONG refs = 1;
+			timed_swapchain(IDirect3DSwapChain9* real, IDirect3DDevice9* d) : r(real), dev(d) {}
+			HRESULT __stdcall QueryInterface(REFIID riid, void** ppv) override
+			{ if (riid == __uuidof(IDirect3DSwapChain9) || riid == __uuidof(IUnknown)) { *ppv = this; AddRef(); return S_OK; } return r->QueryInterface(riid, ppv); }
+			ULONG __stdcall AddRef() override { r->AddRef(); return ++refs; }
+			ULONG __stdcall Release() override { const ULONG n = --refs; r->Release(); if (!n) delete this; return n; }
+			HRESULT __stdcall Present(CONST RECT* a, CONST RECT* b, HWND c, CONST RGNDATA* d, DWORD e) override
+			{ bt_scope _t(g_bt_present); return r->Present(a, b, c, d, e); }
+			HRESULT __stdcall GetFrontBufferData(IDirect3DSurface9* p) override { return r->GetFrontBufferData(p); }
+			HRESULT __stdcall GetBackBuffer(UINT i, D3DBACKBUFFER_TYPE t, IDirect3DSurface9** p) override { return r->GetBackBuffer(i, t, p); }
+			HRESULT __stdcall GetRasterStatus(D3DRASTER_STATUS* p) override { return r->GetRasterStatus(p); }
+			HRESULT __stdcall GetDisplayMode(D3DDISPLAYMODE* p) override { return r->GetDisplayMode(p); }
+			HRESULT __stdcall GetDevice(IDirect3DDevice9** p) override { if (!p) return D3DERR_INVALIDCALL; dev->AddRef(); *p = dev; return D3D_OK; }
+			HRESULT __stdcall GetPresentParameters(D3DPRESENT_PARAMETERS* p) override { return r->GetPresentParameters(p); }
+		};
+
 		HRESULT __stdcall GetSwapChain(UINT iSwapChain, IDirect3DSwapChain9** pSwapChain) override
-		{ return m_real->GetSwapChain(iSwapChain, pSwapChain); }
+		{
+			const HRESULT hr = m_real->GetSwapChain(iSwapChain, pSwapChain);
+			if (SUCCEEDED(hr) && pSwapChain && *pSwapChain && g_bt_wrap_swapchain.load()) *pSwapChain = new timed_swapchain(*pSwapChain, this);
+			return hr;
+		}
 
 		UINT __stdcall GetNumberOfSwapChains() override
 		{ return m_real->GetNumberOfSwapChains(); }
