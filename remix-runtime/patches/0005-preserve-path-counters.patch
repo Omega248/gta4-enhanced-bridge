@@ -1,0 +1,66 @@
+diff --git a/src/dxvk/rtx_render/rtx_draw_call_tracker.cpp b/src/dxvk/rtx_render/rtx_draw_call_tracker.cpp
+index 7ddd439..8627f39 100644
+--- a/src/dxvk/rtx_render/rtx_draw_call_tracker.cpp
++++ b/src/dxvk/rtx_render/rtx_draw_call_tracker.cpp
+@@ -25,6 +25,7 @@
+ #include "rtx_intersection_test.h"
+ #include "dxvk_device.h"
+ #include "../util/util_struct_hash.h"
++#include "../gta4e_zone_profiler.h"
+ 
+ 
+ namespace dxvk {
+@@ -38,12 +39,15 @@ namespace dxvk {
+     // This function is only called when the full identity hash doesn't match, so something must have changed.
+     if (std::memcmp(&ri->objectToWorld, &key.transform, sizeof(Matrix4)) != 0) {
+       ri->dirtyFlags.set(ReplacementInstance::DirtyFlag::Transform);
++      GTA4E_COUNT("ri_drift.transform", 1);
+     }
+     if (ri->vertexPositionHash != key.vertexPositionHash) {
+       ri->dirtyFlags.set(ReplacementInstance::DirtyFlag::VertexPosHash);
++      GTA4E_COUNT("ri_drift.vertex_pos_hash", 1);
+     }
+     if (ri->materialHash != key.materialHash) {
+       ri->dirtyFlags.set(ReplacementInstance::DirtyFlag::MaterialHash);
++      GTA4E_COUNT("ri_drift.material_hash", 1);
+     }
+     // textureTransform/texgenMode aren't fed into a dedicated dirty bit yet —
+     // surface state on the preserve path is reused as-is, so any drift here (terrain
+@@ -53,6 +57,7 @@ namespace dxvk {
+     if (std::memcmp(&ri->textureTransform, &key.textureTransform, sizeof(Matrix4)) != 0 ||
+         ri->texgenMode != key.texgenMode) {
+       ri->dirtyFlags.set(ReplacementInstance::DirtyFlag::Other);
++      GTA4E_COUNT("ri_drift.texture_transform", 1);
+     }
+     if ((ri->dirtyFlags & ReplacementInstance::kLookupDriftMask).isClear()) {
+       ri->dirtyFlags.set(ReplacementInstance::DirtyFlag::Other);
+diff --git a/src/dxvk/rtx_render/rtx_scene_manager.cpp b/src/dxvk/rtx_render/rtx_scene_manager.cpp
+index c992609..81c9544 100644
+--- a/src/dxvk/rtx_render/rtx_scene_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_scene_manager.cpp
+@@ -19,6 +19,7 @@
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
++#include "../gta4e_zone_profiler.h"
+ #include <limits>
+ #include <mutex>
+ #include <vector>
+@@ -760,8 +761,17 @@ namespace dxvk {
+ 
+ 
+     if (usePreservePath) {
++      GTA4E_COUNT("draw.preserve", 1);
+       preserveReplacementInstance(ctx, input, pReplacements, replacementInstance);
+     } else {
++      GTA4E_COUNT("draw.dynamic", 1);
++      if (!replacementInstance->dirtyFlags.isClear()) GTA4E_COUNT("dyn.ri_dirty_flags", 1);
++      if (secondSubmissionThisFrame) GTA4E_COUNT("dyn.second_submission", 1);
++      if (input.getCategoryFlags().test(InstanceCategories::ParticleEmitter)) GTA4E_COUNT("dyn.particle_emitter", 1);
++      if (!activeReplacementsMatch) GTA4E_COUNT("dyn.replacements_changed", 1);
++      if (!legacyMaterialIdentityHashMatch) GTA4E_COUNT("dyn.material_identity", 1);
++      if (!cachedTexturesValidForPreserve) GTA4E_COUNT("dyn.texture_cache_generation", 1);
++      if (terrainCascadesJustChanged) GTA4E_COUNT("dyn.terrain", 1);
+       MaterialData renderMaterialData = determineMaterialData(overrideMaterialData, input);
+       if (!activeReplacementsMatch) {
+         replacementInstance->clear();
