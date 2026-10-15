@@ -10,6 +10,7 @@
 #include "comp_settings.hpp"
 #include "natives.hpp"
 #include "remix_vars.hpp"
+#include "shared/common/remix_api.hpp"
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -323,6 +324,22 @@ namespace gta4
 			bset("nocull_map_areas_high_lod_logic", gs->nocull_map_areas_high_lod_logic);
 			reply(c, true, "\"set\":[" + set_list + "]"); return true;
 		}
+		if (cmd == "remix_raw")
+		{
+			// any Remix option as a raw string (strings, hash rules, options not listed in rtx.conf)
+			std::string results; bool all_ok = true;
+			for (const auto& [k, v] : c.args)
+			{
+				if (!k.starts_with("rtx.") && !k.starts_with("dxvk.")) continue;
+				const auto r = shared::common::remix_api::get().m_bridge.SetConfigVariable(k.c_str(), v.c_str());
+				const bool ok = r == REMIXAPI_ERROR_CODE_SUCCESS;
+				all_ok &= ok;
+				results += std::string(results.empty() ? "" : ",") + "\"" + json_escape(k) + "\":" + (ok ? "true" : "false");
+			}
+			reply(c, all_ok, "\"set\":{" + results + "}");
+			return true;
+		}
+
 		if (cmd == "retain")
 		{
 			// retained static world: on=0/1, k=<send every k-th frame>. Pair with rtx.numFramesToKeepInstances/BLAS > k.
