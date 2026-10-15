@@ -327,7 +327,6 @@ namespace gta4
 		if (cmd == "calm")
 		{
 			// repeatable benchmarks: no police, optional fixed wind/traffic. max_wanted=0..6, wind=0.., cars=0..1
-			const auto pl = n->ConvertIntToPlayerindex(n->GetPlayerId());
 			n->ClearWantedLevel(pl);
 			n->SetMaxWantedLevel(static_cast<uint32_t>(i(c, "max_wanted", 0)));
 			if (has(c, "wind")) n->ForceWind(f(c, "wind"));
