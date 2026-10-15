@@ -568,6 +568,13 @@ namespace gta4
 			const UINT nums[8] = { off, stride, static_cast<UINT>(base), minv, numv, start, prims, static_cast<UINT>(m_pass) };
 			h = fnv(h, nums, sizeof(nums));
 			h = fnv(h, &world, sizeof(D3DMATRIX));
+			// per-draw data the compatibility mod passes to its Remix runtime through unused render states
+			// (texture category, modifiers, forced hash, emissive scale, decal contrast, wetness, animated
+			// UVs, hash seed). Animated UVs change every frame, so those draws never count as unchanged.
+			static constexpr DWORD k_custom_rs[] = { 42, 149, 150, 169, 177, 210, 211, 212, 213, 214, 215, 216, 220 };
+			DWORD rs[sizeof(k_custom_rs) / sizeof(DWORD)] = {};
+			for (size_t i = 0; i < sizeof(k_custom_rs) / sizeof(DWORD); ++i) m_real->GetRenderState(static_cast<D3DRENDERSTATETYPE>(k_custom_rs[i]), &rs[i]);
+			h = fnv(h, rs, sizeof(rs));
 
 			auto& e = m_retain[h];
 			if (e.last_frame == m_frame_no) { g_retain_sent_static.fetch_add(1, std::memory_order_relaxed); return false; }   // repeated within a frame: send
