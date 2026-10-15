@@ -1,0 +1,20 @@
+diff --git a/src/dxvk/rtx_render/rtx_scene_manager.cpp b/src/dxvk/rtx_render/rtx_scene_manager.cpp
+index 81c9544..c6fd46c 100644
+--- a/src/dxvk/rtx_render/rtx_scene_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_scene_manager.cpp
+@@ -772,6 +772,15 @@ namespace dxvk {
+       if (!legacyMaterialIdentityHashMatch) GTA4E_COUNT("dyn.material_identity", 1);
+       if (!cachedTexturesValidForPreserve) GTA4E_COUNT("dyn.texture_cache_generation", 1);
+       if (terrainCascadesJustChanged) GTA4E_COUNT("dyn.terrain", 1);
++      if (!RtxOptions::enablePreservePath()) GTA4E_COUNT("dyn.preserve_disabled", 1);
++      if (RtxOptionManager::isDrawcallTranslationInvalid()) GTA4E_COUNT("dyn.translation_invalid", 1);
++      if (RtxOptions::shouldConvertToLight(input.getMaterialData().getHash())) GTA4E_COUNT("dyn.convert_to_light", 1);
++      if (overrideMaterialHasParticles) GTA4E_COUNT("dyn.override_particles", 1);
++      if (replacementInstance->dirtyFlags.isClear() && !secondSubmissionThisFrame && activeReplacementsMatch &&
++          legacyMaterialIdentityHashMatch && cachedTexturesValidForPreserve && blasAlreadyTouchedByOtherDraw())
++        GTA4E_COUNT("dyn.blas_touched_by_other_draw", 1);
++      if (replacementInstance->frameCreated == currentFrameId || replacementInstance->root.getUntyped() == nullptr)
++        GTA4E_COUNT("dyn.new_instance", 1);
+       MaterialData renderMaterialData = determineMaterialData(overrideMaterialData, input);
+       if (!activeReplacementsMatch) {
+         replacementInstance->clear();
