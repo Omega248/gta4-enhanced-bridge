@@ -2,6 +2,7 @@
 #include <thread>
 #include <deque>
 #include <shlobj.h>
+#include <tlhelp32.h>
 #include "claude_bridge.hpp"
 #include "d3d9_stats.hpp"
 #include "xform_cache.hpp"
@@ -271,6 +272,7 @@ namespace gta4
 				dj += ",\"total\":" + std::to_string(tot) + "}";
 				j += dj;
 			}
+			j += ",\"passes\":" + dedupe_device::pass_json(static_cast<double>(m_frame - last_frame));
 			j += ",\"d3d\":" + d3d9_stats::take_json(wall);
 			last = now; last_frame = m_frame;
 		}
@@ -320,6 +322,46 @@ namespace gta4
 			bset("nocull_map_areas_high_lod_logic", gs->nocull_map_areas_high_lod_logic);
 			reply(c, true, "\"set\":[" + set_list + "]"); return true;
 		}
+		if (cmd == "pass_stats") { dedupe_device::g_pass_stats = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
+
+		if (cmd == "affinity")
+		{
+			// live CPU placement test: game=<hex mask> remix=<hex mask> game_prio/remix_prio = idle|below|normal|above|high
+			auto prio = [](const std::string& s) -> DWORD {
+				return s == "idle" ? IDLE_PRIORITY_CLASS : s == "below" ? BELOW_NORMAL_PRIORITY_CLASS : s == "above" ? ABOVE_NORMAL_PRIORITY_CLASS
+					: s == "high" ? HIGH_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS; };
+			std::string res; bool ok = true;
+			if (has(c, "game"))
+			{
+				const DWORD_PTR m = static_cast<DWORD_PTR>(std::stoull(s(c, "game"), nullptr, 16));
+				ok &= SetProcessAffinityMask(GetCurrentProcess(), m) != 0;
+				res += "\"game\":" + std::string(ok ? "true" : "false");
+			}
+			if (has(c, "game_prio")) SetPriorityClass(GetCurrentProcess(), prio(s(c, "game_prio")));
+			if (has(c, "remix") || has(c, "remix_prio"))
+			{
+				int found = 0;
+				HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+				PROCESSENTRY32W pe{ sizeof(pe) };
+				if (snap != INVALID_HANDLE_VALUE && Process32FirstW(snap, &pe))
+				{
+					do
+					{
+						if (_wcsicmp(pe.szExeFile, L"NvRemixBridge.exe")) continue;
+						HANDLE h = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+						if (!h) { ok = false; continue; }
+						if (has(c, "remix")) ok &= SetProcessAffinityMask(h, static_cast<DWORD_PTR>(std::stoull(s(c, "remix"), nullptr, 16))) != 0;
+						if (has(c, "remix_prio")) ok &= SetPriorityClass(h, prio(s(c, "remix_prio"))) != 0;
+						CloseHandle(h); ++found;
+					} while (Process32NextW(snap, &pe));
+				}
+				if (snap != INVALID_HANDLE_VALUE) CloseHandle(snap);
+				res += std::string(res.empty() ? "" : ",") + "\"remix_processes\":" + std::to_string(found);
+			}
+			reply(c, ok, res);
+			return true;
+		}
+
 		if (cmd == "dedupe") { dedupe_device::g_enabled = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 		if (cmd == "d3d_stats") { d3d9_stats::g_enabled = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 
