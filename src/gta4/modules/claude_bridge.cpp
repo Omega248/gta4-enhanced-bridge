@@ -333,7 +333,15 @@ namespace gta4
 			n->ClearWantedLevel(n->ConvertIntToPlayerindex(n->GetPlayerId()));
 			n->SetMaxWantedLevel(static_cast<uint32_t>(i(c, "max_wanted", 0)));
 			if (has(c, "wind")) n->ForceWind(f(c, "wind"));
-			if (has(c, "cars")) n->SetCarDensityMultiplier(f(c, "cars"));
+			if (has(c, "cars")) { n->SetCarDensityMultiplier(f(c, "cars")); g_bench_cars = f(c, "cars"); }
+			if (has(c, "peds")) g_bench_peds = f(c, "peds");
+			if (has(c, "clear"))   // clear=<radius>: remove cars and peds around the player now
+			{
+				const auto ped = player_ped();
+				float x = 0, y = 0, z = 0; n->GetCharCoordinates(ped, &x, &y, &z);
+				const float r = f(c, "clear");
+				n->ClearAreaOfCars(x, y, z, r); n->ClearAreaOfChars(x, y, z, r);
+			}
 			reply(c, true, ""); return true;
 		}
 
@@ -732,6 +740,9 @@ namespace gta4
 
 	// ------------------------------------------------------------------------- per frame
 
+	// benchmark traffic: < 0 = leave the game alone; applied every frame (the game resets densities)
+	static float g_bench_peds = -1.0f, g_bench_cars = -1.0f;
+
 	void claude_bridge::on_frame()
 	{
 		const auto b = get();
@@ -743,6 +754,9 @@ namespace gta4
 
 		if (b->m_frame % 15 == 0) b->poll_inbox();      // ~4x per second at 60 fps
 		if (b->m_frame % 30 == 0) b->write_status();    // ~2x per second
+
+		if (playing && g_bench_peds >= 0.0f) { n->SetPedDensityMultiplier(g_bench_peds); n->SetScenarioPedDensityMultiplier(g_bench_peds, g_bench_peds); }
+		if (playing && g_bench_cars >= 0.0f) n->SetCarDensityMultiplier(g_bench_cars);
 
 		if (playing) b->run_queue();                    // natives that move things need a live player
 		else if (!b->m_queue.empty() && s(b->m_queue.front(), "cmd") == "ping") b->run_queue();
