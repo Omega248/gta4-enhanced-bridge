@@ -1,5 +1,6 @@
 ﻿#include "std_include.hpp"
 #include "vs_stats.hpp"
+#include "imgui.hpp"
 #include <thread>
 #include <deque>
 #include <shlobj.h>
@@ -374,6 +375,17 @@ namespace gta4
 			return true;
 		}
 
+		if (cmd == "hide")
+		{
+			// cost attribution: hide=<category> on=0/1  (static, vehicle, instances, foliage, fx, ff, vs, water)
+			const auto im = imgui::get(); const bool on = i(c, "on", 1) != 0; const auto what = s(c, "what");
+			bool* flag = what == "static" ? &im->m_dbg_do_not_render_static : what == "vehicle" ? &im->m_dbg_do_not_render_vehicle
+				: what == "instances" ? &im->m_dbg_do_not_render_instances : what == "foliage" ? &im->m_dbg_do_not_render_tree_foliage
+				: what == "fx" ? &im->m_dbg_do_not_render_fx : what == "ff" ? &im->m_dbg_do_not_render_ff
+				: what == "vs" ? &im->m_dbg_do_not_render_indexed_prims_with_vertexshader : what == "water" ? &im->m_dbg_do_not_render_water : nullptr;
+			if (!flag) { reply(c, false, "\"error\":\"unknown category\""); return true; }
+			*flag = on; reply(c, true, ""); return true;
+		}
 		if (cmd == "vs_skip") { vs_stats::g_skip_mask = static_cast<std::uint32_t>(i(c, "mask", 0)); reply(c, true, ""); return true; }
 		if (cmd == "pad") { dedupe_device::g_pad_rs = i(c, "rs", 0); dedupe_device::g_pad_vsc = i(c, "vsc", 0); reply(c, true, ""); return true; }
 		if (cmd == "bridge_time") { dedupe_device::g_bt_on = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
