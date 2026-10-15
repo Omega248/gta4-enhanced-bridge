@@ -604,6 +604,7 @@ namespace gta4
 				for (auto it = m_retain.begin(); it != m_retain.end(); ) it = (m_frame_no - it->second.last_frame > 120) ? m_retain.erase(it) : std::next(it);
 				m_static_res.clear();          // re-check resources now and then (pointers get reused after streaming)
 				for (auto it = m_dupe_seen.begin(); it != m_dupe_seen.end(); ) it = (m_frame_no - it->second > 4) ? m_dupe_seen.erase(it) : std::next(it);
+				for (auto it = m_near.begin(); it != m_near.end(); ) it = (m_frame_no - it->second.frame > 4) ? m_near.erase(it) : std::next(it);
 				g_retain_tracked.store(static_cast<std::uint32_t>(m_retain.size()));
 			}
 		}
@@ -672,6 +673,17 @@ namespace gta4
 		static inline std::atomic<bool> g_dupe_skip{ false };
 		static inline std::atomic<std::uint64_t> g_dupe_skipped{ 0 };
 		std::unordered_map<std::uint64_t, std::uint32_t> m_dupe_seen;
+		struct near_t { std::uint32_t frame = 0xFFFFFFFF; const void* t0 = nullptr; const void* t1 = nullptr; const void* ps = nullptr; int pass = -1; DWORD rs[13] = {}; };
+		std::unordered_map<std::uint64_t, near_t> m_near;
+		// [0]=textures, [1]=pixel shader, [2..14]=custom RS 42,149,150,169,177,210..216,220, [15]=render target
+		static inline std::atomic<std::uint64_t> g_near_total{ 0 }, g_near_diff[16];
+		static std::string near_json(double frames)
+		{
+			const double f = frames > 0 ? frames : 1.0; char b[64];
+			std::string j = "{\"total\":" + std::to_string(static_cast<long long>(g_near_total.exchange(0) / f)) + ",\"diff\":[";
+			for (int i = 0; i < 16; ++i) { sprintf_s(b, "%s%.0f", i ? "," : "", g_near_diff[i].exchange(0) / f); j += b; }
+			return j + "]}";
+		}
 		bool dupe_skip(INT base, UINT minv, UINT numv, UINT start, UINT prims)
 		{
 			struct rel { IUnknown* p = nullptr; ~rel() { if (p) p->Release(); } };
@@ -694,6 +706,25 @@ namespace gta4
 			DWORD rs[sizeof(k_custom_rs) / sizeof(DWORD)] = {};
 			for (size_t i = 0; i < sizeof(k_custom_rs) / sizeof(DWORD); ++i) m_real->GetRenderState(static_cast<D3DRENDERSTATETYPE>(k_custom_rs[i]), &rs[i]);
 			h = fnv(h, rs, sizeof(rs));
+			// diagnostics: same geometry + transform submitted again this frame but with a different
+			// material / per-draw data -> Remix sees one instance whose material flips (slow path)
+			{
+				std::uint64_t g = 1469598103934665603ull;
+				const void* gp[3] = { vb, ib, decl };
+				g = fnv(g, gp, sizeof(gp)); g = fnv(g, nums, sizeof(nums)); g = fnv(g, &world, sizeof(D3DMATRIX));
+				auto& n = m_near[g];
+				if (n.frame == m_frame_no)
+				{
+					g_near_total.fetch_add(1, std::memory_order_relaxed);
+					if (n.t0 != t0 || n.t1 != t1) g_near_diff[0].fetch_add(1, std::memory_order_relaxed);
+					if (n.ps != ps) g_near_diff[1].fetch_add(1, std::memory_order_relaxed);
+					for (size_t i = 0; i < sizeof(k_custom_rs) / sizeof(DWORD); ++i)
+						if (n.rs[i] != rs[i]) g_near_diff[2 + i].fetch_add(1, std::memory_order_relaxed);
+					if (n.pass != m_pass) g_near_diff[2 + sizeof(k_custom_rs) / sizeof(DWORD)].fetch_add(1, std::memory_order_relaxed);
+				}
+				n.frame = m_frame_no; n.t0 = t0; n.t1 = t1; n.ps = ps; n.pass = m_pass;
+				std::memcpy(n.rs, rs, sizeof(rs));
+			}
 			auto [it, inserted] = m_dupe_seen.try_emplace(h, m_frame_no);
 			if (!inserted && it->second == m_frame_no) { g_dupe_skipped.fetch_add(1, std::memory_order_relaxed); return true; }
 			it->second = m_frame_no;
