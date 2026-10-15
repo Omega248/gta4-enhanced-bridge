@@ -2,6 +2,9 @@
 #include "vs_stats.hpp"
 #include "imgui.hpp"
 #include <thread>
+#include <sstream>
+#include <fstream>
+#include <atomic>
 #include <deque>
 #include <shlobj.h>
 #include <tlhelp32.h>
@@ -21,6 +24,43 @@ namespace gta4
 {
 	// benchmark traffic: < 0 = leave the game alone; applied every frame (the game resets densities)
 	static float g_bench_peds = -1.0f, g_bench_cars = -1.0f;
+
+	// ---- GTA IV Enhanced tooling: crash log, session telemetry, scripted benchmarks -------------
+	static std::filesystem::path g_tool_dir;            // bridge folder (set in the constructor)
+	static bool g_telemetry_on = true;                  // passive session log while you play
+	static int g_telemetry_interval = 5;                // seconds
+	static std::atomic<uint32_t> g_tool_frame{ 0 };
+	static char g_last_cmd[64] = "";
+	static float g_last_pos[3] = {};
+	static LPTOP_LEVEL_EXCEPTION_FILTER g_prev_filter = nullptr;
+
+	static LONG WINAPI gta4e_crash_filter(EXCEPTION_POINTERS* ep)
+	{
+		if (!g_tool_dir.empty() && ep && ep->ExceptionRecord)
+		{
+			FILE* f = nullptr;
+			if (_wfopen_s(&f, (g_tool_dir / L"crash_log.txt").c_str(), L"a") == 0 && f)
+			{
+				const auto* er = ep->ExceptionRecord;
+				HMODULE mod = nullptr; char modname[MAX_PATH] = "?";
+				if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+					static_cast<LPCSTR>(er->ExceptionAddress), &mod) && mod) GetModuleFileNameA(mod, modname, MAX_PATH);
+				SYSTEMTIME t; GetLocalTime(&t);
+				fprintf(f, "%04u-%02u-%02u %02u:%02u:%02u crash code 0x%08lX at %p (%s +0x%llX) frame %u last_cmd '%s' pos %.1f %.1f %.1f\n",
+					t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, er->ExceptionCode, er->ExceptionAddress, modname,
+					static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(er->ExceptionAddress) - reinterpret_cast<uintptr_t>(mod)),
+					g_tool_frame.load(), g_last_cmd, g_last_pos[0], g_last_pos[1], g_last_pos[2]);
+				fclose(f);
+			}
+		}
+		return g_prev_filter ? g_prev_filter(ep) : EXCEPTION_CONTINUE_SEARCH;
+	}
+
+	static std::string read_text(const std::filesystem::path& p)
+	{
+		std::ifstream in(p, std::ios::binary); if (!in) return {};
+		std::stringstream ss; ss << in.rdbuf(); return ss.str();
+	}
 
 	namespace
 	{
@@ -301,6 +341,77 @@ namespace gta4
 		char buf[512];
 
 		if (cmd == "ping") { reply(c, true, "\"msg\":\"pong\""); return true; }
+
+		strncpy_s(g_last_cmd, cmd.c_str(), _TRUNCATE);
+
+		// script file=<name>  : runs <bridge>/scripts/<name>.txt, one command per line ("cmd k=v k=v").
+		// Lines: any bridge command, plus  wait s=<sec>,  measure name=<label> s=<sec>,  exit_game.
+		if (cmd == "script")
+		{
+			const auto path = m_dir / "scripts" / (s(c, "file", "autorun") + ".txt");
+			std::ifstream in(path);
+			if (!in) { reply(c, false, "\"error\":\"script not found\""); return true; }
+			std::vector<command> cmds; std::string line; int n_line = 0;
+			const std::string report = s(c, "report", c.id);
+			while (std::getline(in, line))
+			{
+				line = trim(line);
+				if (line.empty() || line[0] == '#') continue;
+				command sc; sc.id = c.id + "_" + std::to_string(++n_line);
+				std::istringstream ls(line); std::string tok; bool first = true;
+				while (ls >> tok)
+				{
+					const auto eq = tok.find('=');
+					if (first && eq == std::string::npos) { sc.args["cmd"] = tok; first = false; continue; }
+					first = false;
+					if (eq != std::string::npos) sc.args[tok.substr(0, eq)] = tok.substr(eq + 1);
+				}
+				sc.args["report"] = report;
+				if (sc.args.contains("cmd")) cmds.push_back(std::move(sc));
+			}
+			reply(c, true, "\"steps\":" + std::to_string(cmds.size()) + ",\"report\":\"" + json_escape(report) + "\"");
+			// insert right after this command (the caller pops this one)
+			for (auto it = cmds.rbegin(); it != cmds.rend(); ++it) m_queue.insert(m_queue.begin() + 1, std::move(*it));
+			return true;
+		}
+
+		if (cmd == "wait")
+		{
+			if (c.step == 0) { c.note = std::to_string(GetTickCount64()); c.step = 1; }
+			if (GetTickCount64() - std::stoull(c.note) < static_cast<ULONGLONG>(f(c, "s", 1.0f) * 1000.0f)) return false;
+			reply(c, true, ""); return true;
+		}
+
+		// measure name=<label> s=<sec> : average fps over the window, then appends the label, fps,
+		// the latest status.json and the Remix zone profile to <bridge>/reports/<report>.jsonl
+		if (cmd == "measure")
+		{
+			if (c.step == 0) { c.note = std::to_string(GetTickCount64()) + " " + std::to_string(m_frame); c.step = 1; return false; }
+			std::istringstream ns(c.note); ULONGLONG t0 = 0; uint32_t f0 = 0; ns >> t0 >> f0;
+			const ULONGLONG el = GetTickCount64() - t0;
+			if (el < static_cast<ULONGLONG>(f(c, "s", 8.0f) * 1000.0f)) return false;
+			const double fps = el ? (m_frame - f0) * 1000.0 / static_cast<double>(el) : 0.0;
+			std::string status = read_text(m_dir / "status.json"); while (!status.empty() && (status.back() == '\n' || status.back() == '\r')) status.pop_back();
+			if (status.empty()) status = "null";
+			const std::string prof = read_text(std::filesystem::path("rtx-remix") / "gta4e_profile.txt");
+			char fb[64]; sprintf_s(fb, "%.2f", fps);
+			const std::string rec = "{\"name\":\"" + json_escape(s(c, "name", "m")) + "\",\"fps\":" + fb + ",\"frames\":" + std::to_string(m_frame - f0)
+				+ ",\"ms\":" + std::to_string(el) + ",\"status\":" + status + ",\"remix_profile\":\"" + json_escape(prof) + "\"}\n";
+			std::error_code ec; std::filesystem::create_directories(m_dir / "reports", ec);
+			std::ofstream out(m_dir / "reports" / (s(c, "report", "bench") + ".jsonl"), std::ios::app | std::ios::binary); out << rec;
+			reply(c, true, std::string("\"fps\":") + fb); return true;
+		}
+
+		if (cmd == "exit_game")
+		{
+			reply(c, true, "");
+			std::ofstream(m_dir / "killed.txt") << "exit_game command\n";
+			TerminateProcess(GetCurrentProcess(), 0);
+			return true;
+		}
+
+		// telemetry on=0/1 interval=<sec>
+		if (cmd == "telemetry") { g_telemetry_on = i(c, "on", 1) != 0; g_telemetry_interval = std::max(1, i(c, "interval", 5)); reply(c, true, ""); return true; }
 
 		if (cmd == "status") { write_status(); reply(c, true, ""); return true; }
 
@@ -779,6 +890,49 @@ namespace gta4
 		if (playing && g_bench_peds >= 0.0f) { n->SetPedDensityMultiplier(g_bench_peds); n->SetScenarioPedDensityMultiplier(g_bench_peds, g_bench_peds); }
 		if (playing && g_bench_cars >= 0.0f) n->SetCarDensityMultiplier(g_bench_cars);
 
+		g_tool_frame = b->m_frame;
+
+		// passive session telemetry: one line every few seconds while playing -> <bridge>/session_log.jsonl
+		{
+			static ULONGLONG t_last = GetTickCount64(); static uint32_t f_last = b->m_frame; static uint32_t playing_frames = 0;
+			playing_frames = playing ? playing_frames + 1 : 0;
+			const ULONGLONG now = GetTickCount64();
+			if (now - t_last >= static_cast<ULONGLONG>(g_telemetry_interval) * 1000ull)
+			{
+				const double fps = (b->m_frame - f_last) * 1000.0 / static_cast<double>(now - t_last);
+				t_last = now; f_last = b->m_frame;
+				if (playing && g_telemetry_on)
+				{
+					const auto ped = player_ped();
+					float x = 0, y = 0, z = 0; n->GetCharCoordinates(ped, &x, &y, &z);
+					g_last_pos[0] = x; g_last_pos[1] = y; g_last_pos[2] = z;
+					uint32_t hh = 0, mm = 0; n->GetTimeOfDay(&hh, &mm); uint32_t w = 0; n->GetCurrentWeather(&w);
+					const char* zone = n->GetNameOfInfoZone(x, y, z);
+					SYSTEMTIME t; GetLocalTime(&t);
+					char line[512];
+					sprintf_s(line, "{\"t\":\"%02u:%02u:%02u\",\"fps\":%.1f,\"pos\":[%.0f,%.0f,%.0f],\"zone\":\"%s\",\"car\":%d,\"tod\":\"%u:%02u\",\"weather\":%u}\n",
+						t.wHour, t.wMinute, t.wSecond, fps, x, y, z, zone ? json_escape(zone).c_str() : "", n->IsCharInAnyCar(ped) ? 1 : 0, hh, mm, w);
+					std::ofstream(b->m_dir / "session_log.jsonl", std::ios::app | std::ios::binary) << line;
+				}
+			}
+
+			// autorun: <bridge>/scripts/autorun.txt runs once, 8 s after the player is in control; renamed afterwards
+			if (playing_frames == 240)
+			{
+				std::error_code ec;
+				const auto ar = b->m_dir / "scripts" / "autorun.txt";
+				if (std::filesystem::exists(ar, ec))
+				{
+					command sc; SYSTEMTIME t; GetLocalTime(&t); char id[64];
+					sprintf_s(id, "autorun_%04u%02u%02u_%02u%02u%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+					sc.id = id; sc.args["cmd"] = "script"; sc.args["file"] = "autorun"; sc.args["report"] = id;
+					b->m_queue.push_front(std::move(sc));
+					// keep the script but mark it as consumed so it only runs on the launch it was meant for
+					std::filesystem::rename(ar, b->m_dir / "scripts" / "autorun.last.txt", ec);
+				}
+			}
+		}
+
 		if (playing) b->run_queue();                    // natives that move things need a live player
 		else if (!b->m_queue.empty() && s(b->m_queue.front(), "cmd") == "ping") b->run_queue();
 	}
@@ -788,6 +942,12 @@ namespace gta4
 		p_this = this;
 		init_dirs();
 		m_initialized = true;
+		if (m_ready)
+		{
+			g_tool_dir = m_dir;
+			std::error_code ec; std::filesystem::create_directories(m_dir / "scripts", ec); std::filesystem::create_directories(m_dir / "reports", ec);
+			g_prev_filter = SetUnhandledExceptionFilter(gta4e_crash_filter);
+		}
 
 		// Kill switch on its own thread, so it works even when the render thread is stuck (GPU hang,
 		// Remix bridge waiting on Present): creating <bridge>/kill ends the game process immediately.
