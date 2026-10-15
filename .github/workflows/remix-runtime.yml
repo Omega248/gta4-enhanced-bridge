@@ -39,7 +39,7 @@ jobs:
         }
 
     - name: Setup Meson / Ninja
-      run: pip install meson==1.1.0 ninja
+      run: pip install meson==1.1.0 ninja pillow numpy
 
     - name: Build release
       shell: pwsh
