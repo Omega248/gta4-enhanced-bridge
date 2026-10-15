@@ -18,6 +18,9 @@
 
 namespace gta4
 {
+	// benchmark traffic: < 0 = leave the game alone; applied every frame (the game resets densities)
+	static float g_bench_peds = -1.0f, g_bench_cars = -1.0f;
+
 	namespace
 	{
 		std::string json_escape(const std::string& in)
@@ -337,8 +340,8 @@ namespace gta4
 			if (has(c, "peds")) g_bench_peds = f(c, "peds");
 			if (has(c, "clear"))   // clear=<radius>: remove cars and peds around the player now
 			{
-				const auto ped = player_ped();
-				float x = 0, y = 0, z = 0; n->GetCharCoordinates(ped, &x, &y, &z);
+				const auto me = player_ped();
+				float x = 0, y = 0, z = 0; n->GetCharCoordinates(me, &x, &y, &z);
 				const float r = f(c, "clear");
 				n->ClearAreaOfCars(x, y, z, r); n->ClearAreaOfChars(x, y, z, r);
 			}
@@ -739,9 +742,6 @@ namespace gta4
 	}
 
 	// ------------------------------------------------------------------------- per frame
-
-	// benchmark traffic: < 0 = leave the game alone; applied every frame (the game resets densities)
-	static float g_bench_peds = -1.0f, g_bench_cars = -1.0f;
 
 	void claude_bridge::on_frame()
 	{
