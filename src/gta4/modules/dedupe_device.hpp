@@ -55,6 +55,27 @@ namespace gta4
 			return j + "]";
 		}
 
+		// --- retained static world ("round-robin resubmission") ------------------------------------
+		// Remix keeps a ray-traced instance alive for rtx.numFramesToKeepInstances frames after its last
+		// draw (and indefinitely outside the frustum with rtx.antiCulling.object). So a static object that
+		// was drawn identically for a couple of frames does not need to be re-sent every frame: we send
+		// each one only every K-th frame (staggered by its hash) and drop the other draws before they cross
+		// the bridge. Requires rtx.numFramesToKeepInstances / numFramesToKeepBLAS > K on the Remix side.
+		// Only fixed-function draws (no shader bound) with a static world matrix and static buffers qualify;
+		// peds (skinned), moving vehicles, particles and anything new or changed are always sent.
+		static inline std::atomic<bool> g_retain{ false };
+		static inline std::atomic<int> g_retain_k{ 4 };
+		static inline std::atomic<std::uint64_t> g_retain_skipped{ 0 }, g_retain_sent_static{ 0 }, g_retain_sent_other{ 0 };
+		static inline std::atomic<std::uint32_t> g_retain_tracked{ 0 };
+		static std::string retain_json(double frames)
+		{
+			const double f = frames > 0 ? frames : 1.0; char b[200];
+			sprintf_s(b, "{\"on\":%s,\"k\":%d,\"skipped\":%.0f,\"sent_static\":%.0f,\"sent_other\":%.0f,\"tracked\":%u}",
+				g_retain.load() ? "true" : "false", g_retain_k.load(), g_retain_skipped.exchange(0) / f,
+				g_retain_sent_static.exchange(0) / f, g_retain_sent_other.exchange(0) / f, g_retain_tracked.load());
+			return b;
+		}
+
 		explicit dedupe_device(IDirect3DDevice9* real) : m_real(real) { invalidate(); m_pass = pass_index("backbuffer"); }
 		IDirect3DDevice9* real() const { return m_real; }
 
@@ -116,7 +137,7 @@ namespace gta4
 		{ invalidate(); return m_real->Reset(pPresentationParameters); }
 
 		HRESULT __stdcall Present(CONST RECT* pSourceRect, CONST RECT* pDestRect, HWND hDestWindowOverride, CONST RGNDATA* pDirtyRegion) override
-		{ return m_real->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion); }
+		{ on_present(); return m_real->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion); }
 
 		HRESULT __stdcall GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) override
 		{ return m_real->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer); }
@@ -314,7 +335,8 @@ namespace gta4
 		{ note_draw(PrimitiveCount); return m_real->DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount); }
 
 		HRESULT __stdcall DrawIndexedPrimitive(D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) override
-		{ note_draw(primCount); return m_real->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
+		{ if (g_retain.load(std::memory_order_relaxed) && retain_skip(BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount)) return D3D_OK;
+			note_draw(primCount); return m_real->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
 
 		HRESULT __stdcall DrawPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride) override
 		{ note_draw(PrimitiveCount); return m_real->DrawPrimitiveUP(PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride); }
@@ -465,6 +487,89 @@ namespace gta4
 		struct xf_t { D3DMATRIX m; bool valid; };
 
 		bool on() const { return g_enabled.load(std::memory_order_relaxed); }
+		struct retain_entry { std::uint32_t last_frame; std::uint32_t streak; };
+		std::unordered_map<std::uint64_t, retain_entry> m_retain;
+		std::unordered_map<const void*, bool> m_static_res;   // buffer/texture -> may be retained (not dynamic, not a render target)
+		std::uint32_t m_frame_no = 1;
+
+		static std::uint64_t fnv(std::uint64_t h, const void* p, size_t n)
+		{
+			const auto* b = static_cast<const unsigned char*>(p);
+			for (size_t i = 0; i < n; ++i) { h ^= b[i]; h *= 1099511628211ull; }
+			return h;
+		}
+
+		bool res_static_vb(IDirect3DVertexBuffer9* vb)
+		{
+			if (!vb) return false;
+			const auto it = m_static_res.find(vb); if (it != m_static_res.end()) return it->second;
+			D3DVERTEXBUFFER_DESC d{}; const bool ok = SUCCEEDED(vb->GetDesc(&d)) && !(d.Usage & D3DUSAGE_DYNAMIC);
+			m_static_res[vb] = ok; return ok;
+		}
+		bool res_static_ib(IDirect3DIndexBuffer9* ib)
+		{
+			if (!ib) return false;
+			const auto it = m_static_res.find(ib); if (it != m_static_res.end()) return it->second;
+			D3DINDEXBUFFER_DESC d{}; const bool ok = SUCCEEDED(ib->GetDesc(&d)) && !(d.Usage & D3DUSAGE_DYNAMIC);
+			m_static_res[ib] = ok; return ok;
+		}
+		bool res_static_tex(IDirect3DBaseTexture9* t)
+		{
+			if (!t) return true;
+			const auto it = m_static_res.find(t); if (it != m_static_res.end()) return it->second;
+			bool ok = true;
+			if (t->GetType() == D3DRTYPE_TEXTURE)
+			{
+				D3DSURFACE_DESC d{};
+				if (SUCCEEDED(static_cast<IDirect3DTexture9*>(t)->GetLevelDesc(0, &d))) ok = !(d.Usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DYNAMIC | D3DUSAGE_DEPTHSTENCIL));
+			}
+			else ok = false;   // cube/volume textures: leave alone
+			m_static_res[t] = ok; return ok;
+		}
+
+		void on_present()
+		{
+			++m_frame_no;
+			if ((m_frame_no & 255) == 0)
+			{
+				for (auto it = m_retain.begin(); it != m_retain.end(); ) it = (m_frame_no - it->second.last_frame > 120) ? m_retain.erase(it) : std::next(it);
+				m_static_res.clear();          // re-check resources now and then (pointers get reused after streaming)
+				g_retain_tracked.store(static_cast<std::uint32_t>(m_retain.size()));
+			}
+		}
+
+		// true = drop this draw (Remix still holds the identical instance from a recent frame)
+		bool retain_skip(INT base, UINT minv, UINT numv, UINT start, UINT prims)
+		{
+			const auto other = [] { g_retain_sent_other.fetch_add(1, std::memory_order_relaxed); return false; };
+			if (m_vs || m_ps || !m_xf[0].valid || !m_vb[0].valid || !m_ib_valid) return other();
+			if (!res_static_vb(m_vb[0].vb) || !res_static_ib(m_ib)) return other();
+			IDirect3DBaseTexture9* t0 = nullptr; IDirect3DBaseTexture9* t1 = nullptr;
+			{ const auto a = m_tex.m.find(0); if (a != m_tex.m.end()) t0 = reinterpret_cast<IDirect3DBaseTexture9*>(a->second); }
+			{ const auto b = m_tex.m.find(1); if (b != m_tex.m.end()) t1 = reinterpret_cast<IDirect3DBaseTexture9*>(b->second); }
+			if (!res_static_tex(t0) || !res_static_tex(t1)) return other();
+
+			std::uint64_t h = 1469598103934665603ull;
+			const void* ptrs[6] = { m_vb[0].vb, m_ib, t0, t1, m_decl_valid ? static_cast<const void*>(m_decl) : nullptr, reinterpret_cast<const void*>(static_cast<std::uintptr_t>(m_fvf_valid ? m_fvf : 0)) };
+			h = fnv(h, ptrs, sizeof(ptrs));
+			const UINT nums[8] = { m_vb[0].off, m_vb[0].stride, static_cast<UINT>(base), minv, numv, start, prims, static_cast<UINT>(m_pass) };
+			h = fnv(h, nums, sizeof(nums));
+			h = fnv(h, &m_xf[0].m, sizeof(D3DMATRIX));
+
+			auto& e = m_retain[h];
+			if (e.last_frame == m_frame_no) { g_retain_sent_static.fetch_add(1, std::memory_order_relaxed); return false; }   // repeated within a frame: send
+			e.streak = (e.last_frame + 1 == m_frame_no) ? e.streak + 1 : 0;
+			e.last_frame = m_frame_no;
+			const int k = g_retain_k.load(std::memory_order_relaxed);
+			if (e.streak >= 2 && k > 1 && ((m_frame_no + static_cast<std::uint32_t>(h >> 40)) % static_cast<std::uint32_t>(k)) != 0)
+			{
+				g_retain_skipped.fetch_add(1, std::memory_order_relaxed);
+				return true;
+			}
+			g_retain_sent_static.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+
 		void note_draw(UINT prims)
 		{
 			if (!g_pass_stats.load(std::memory_order_relaxed)) return;

@@ -273,6 +273,7 @@ namespace gta4
 				j += dj;
 			}
 			j += ",\"passes\":" + dedupe_device::pass_json(static_cast<double>(m_frame - last_frame));
+			j += ",\"retain\":" + dedupe_device::retain_json(static_cast<double>(m_frame - last_frame));
 			j += ",\"d3d\":" + d3d9_stats::take_json(wall);
 			last = now; last_frame = m_frame;
 		}
@@ -322,6 +323,15 @@ namespace gta4
 			bset("nocull_map_areas_high_lod_logic", gs->nocull_map_areas_high_lod_logic);
 			reply(c, true, "\"set\":[" + set_list + "]"); return true;
 		}
+		if (cmd == "retain")
+		{
+			// retained static world: on=0/1, k=<send every k-th frame>. Pair with rtx.numFramesToKeepInstances/BLAS > k.
+			if (has(c, "k")) dedupe_device::g_retain_k = std::max(1, std::min(16, i(c, "k", 4)));
+			if (has(c, "on")) dedupe_device::g_retain = i(c, "on", 1) != 0;
+			reply(c, true, "\"on\":" + std::string(dedupe_device::g_retain.load() ? "true" : "false") + ",\"k\":" + std::to_string(dedupe_device::g_retain_k.load()));
+			return true;
+		}
+
 		if (cmd == "pass_stats") { dedupe_device::g_pass_stats = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 
 		if (cmd == "affinity")
