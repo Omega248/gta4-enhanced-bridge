@@ -15,6 +15,8 @@
 #include <cstring>
 #include <unordered_map>
 #include <string>
+#include <vector>
+#include <algorithm>
 #include <cstdio>
 
 namespace gta4
@@ -393,7 +395,7 @@ namespace gta4
 		HRESULT __stdcall DrawIndexedPrimitive(D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) override
 		{ if (g_dupe_skip.load(std::memory_order_relaxed) && dupe_skip(BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount)) return D3D_OK;
 			if (g_retain.load(std::memory_order_relaxed) && retain_skip(BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount)) return D3D_OK;
-			note_draw(primCount); pad(); bt_scope _t(g_bt_draw); return m_real->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
+			note_draw(primCount); pad(); if (g_skin_probe.load(std::memory_order_relaxed) > 0) skin_probe_draw(primCount, NumVertices); bt_scope _t(g_bt_draw); return m_real->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
 
 		HRESULT __stdcall DrawPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride) override
 		{ note_draw(PrimitiveCount); return m_real->DrawPrimitiveUP(PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride); }
@@ -429,7 +431,8 @@ namespace gta4
 		{ return m_real->GetVertexShader(ppShader); }
 
 		HRESULT __stdcall SetVertexShaderConstantF(UINT StartRegister, CONST float* pConstantData, UINT Vector4fCount) override
-		{ if (on() && m_vsc.same(StartRegister, pConstantData, Vector4fCount)) return skip(S_CONST); m_vsc.put(StartRegister, pConstantData, Vector4fCount); { bt_scope _t(g_bt_set); return m_real->SetVertexShaderConstantF(StartRegister, pConstantData, Vector4fCount); } }
+		{ if (g_skin_probe.load(std::memory_order_relaxed) > 0 && m_vsc_log.size() < 64) m_vsc_log.push_back({ StartRegister, Vector4fCount, pConstantData && Vector4fCount ? std::vector<float>(pConstantData, pConstantData + 4 * std::min<UINT>(Vector4fCount, 6)) : std::vector<float>() });
+			if (on() && m_vsc.same(StartRegister, pConstantData, Vector4fCount)) return skip(S_CONST); m_vsc.put(StartRegister, pConstantData, Vector4fCount); { bt_scope _t(g_bt_set); return m_real->SetVertexShaderConstantF(StartRegister, pConstantData, Vector4fCount); } }
 
 		HRESULT __stdcall GetVertexShaderConstantF(UINT StartRegister, float* pConstantData, UINT Vector4fCount) override
 		{ return m_real->GetVertexShaderConstantF(StartRegister, pConstantData, Vector4fCount); }
@@ -665,6 +668,42 @@ namespace gta4
 		}
 
 	public:
+		// --- skinning probe: records how the game feeds bone matrices to skinned (ped) draws, so peds can
+		// later be drawn fixed-function with Remix doing the skinning instead of vertex capture.
+		static inline std::atomic<int> g_skin_probe{ 0 };
+		static inline std::wstring g_skin_probe_path;
+		struct vsc_rec { UINT start, count; std::vector<float> head; };
+		std::vector<vsc_rec> m_vsc_log;
+		void skin_probe_draw(UINT prims, UINT numv)
+		{
+			struct rel { IUnknown* p = nullptr; ~rel() { if (p) p->Release(); } };
+			IDirect3DVertexShader9* vs = nullptr; m_real->GetVertexShader(&vs); rel r_vs{ vs };
+			IDirect3DVertexDeclaration9* decl = nullptr; m_real->GetVertexDeclaration(&decl); rel r_decl{ decl };
+			bool skinned = false; D3DVERTEXELEMENT9 el[MAXD3DDECLLENGTH + 1]; UINT n = MAXD3DDECLLENGTH + 1;
+			if (vs && decl && SUCCEEDED(decl->GetDeclaration(el, &n)))
+				for (UINT i = 0; i < n && el[i].Stream != 0xFF; ++i) if (el[i].Usage == D3DDECLUSAGE_BLENDINDICES) skinned = true;
+			if (skinned && !g_skin_probe_path.empty() && g_skin_probe.fetch_sub(1) > 0)
+			{
+				FILE* f = nullptr;
+				if (_wfopen_s(&f, g_skin_probe_path.c_str(), L"a") == 0 && f)
+				{
+					fprintf(f, "=== skinned draw: prims %u verts %u vs %p pass %d\n", prims, numv, static_cast<void*>(vs), m_pass);
+					for (UINT i = 0; i < n && el[i].Stream != 0xFF; ++i)
+						fprintf(f, "  decl stream %u off %u type %u usage %u idx %u\n", el[i].Stream, el[i].Offset, el[i].Type, el[i].Usage, el[i].UsageIndex);
+					for (const auto& r : m_vsc_log)
+					{
+						fprintf(f, "  vsc c%u x%u :", r.start, r.count);
+						for (size_t k = 0; k < r.head.size(); ++k) fprintf(f, "%s%.4g", (k % 4) ? " " : " | ", r.head[k]);
+						fprintf(f, "\n");
+					}
+					D3DMATRIX w{}; m_real->GetTransform(D3DTS_WORLD, &w);
+					fprintf(f, "  world t %.2f %.2f %.2f\n", w._41, w._42, w._43);
+					fclose(f);
+				}
+			}
+			m_vsc_log.clear();
+		}
+
 		// --- same-frame duplicate filter -----------------------------------------------------------
 		// Some world objects are submitted twice in one frame with identical geometry, transform and
 		// material (e.g. once per render pass). Remix sees the same instance a second time, takes the slow

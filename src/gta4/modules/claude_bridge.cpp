@@ -376,6 +376,13 @@ namespace gta4
 			return true;
 		}
 
+		if (cmd == "skin_probe")
+		{
+			// skin_probe n=<skinned draws to log> -> <bridge>/skin_probe.txt
+			dedupe_device::g_skin_probe_path = (m_dir / L"skin_probe.txt").wstring();
+			dedupe_device::g_skin_probe = std::max(0, std::min(200, i(c, "n", 8)));
+			reply(c, true, ""); return true;
+		}
 		if (cmd == "dupe_skip") { dedupe_device::g_dupe_skip = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 		if (cmd == "hide")
 		{
