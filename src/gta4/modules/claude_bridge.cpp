@@ -375,6 +375,7 @@ namespace gta4
 			return true;
 		}
 
+		if (cmd == "dupe_skip") { dedupe_device::g_dupe_skip = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 		if (cmd == "hide")
 		{
 			// cost attribution: hide=<category> on=0/1  (static, vehicle, instances, foliage, fx, ff, vs, water)

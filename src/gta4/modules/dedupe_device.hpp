@@ -70,8 +70,9 @@ namespace gta4
 		static inline std::atomic<std::uint32_t> g_retain_tracked{ 0 };
 		static std::string retain_json(double frames)
 		{
-			const double f = frames > 0 ? frames : 1.0; char b[200];
-			sprintf_s(b, "{\"on\":%s,\"shaders\":%s,\"k\":%d,\"skipped\":%.0f,\"sent_static\":%.0f,\"sent_other\":%.0f,\"tracked\":%u}",
+			const double f = frames > 0 ? frames : 1.0; char b[260];
+			sprintf_s(b, "{\"dupe_skip\":%s,\"dupes\":%.0f,\"on\":%s,\"shaders\":%s,\"k\":%d,\"skipped\":%.0f,\"sent_static\":%.0f,\"sent_other\":%.0f,\"tracked\":%u}",
+				g_dupe_skip.load() ? "true" : "false", g_dupe_skipped.exchange(0) / f,
 				g_retain.load() ? "true" : "false", g_retain_shaders.load() ? "true" : "false", g_retain_k.load(), g_retain_skipped.exchange(0) / f,
 				g_retain_sent_static.exchange(0) / f, g_retain_sent_other.exchange(0) / f, g_retain_tracked.load());
 			return b;
@@ -390,7 +391,8 @@ namespace gta4
 		{ note_draw(PrimitiveCount); bt_scope _t(g_bt_draw); return m_real->DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount); }
 
 		HRESULT __stdcall DrawIndexedPrimitive(D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) override
-		{ if (g_retain.load(std::memory_order_relaxed) && retain_skip(BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount)) return D3D_OK;
+		{ if (g_dupe_skip.load(std::memory_order_relaxed) && dupe_skip(BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount)) return D3D_OK;
+			if (g_retain.load(std::memory_order_relaxed) && retain_skip(BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount)) return D3D_OK;
 			note_draw(primCount); pad(); bt_scope _t(g_bt_draw); return m_real->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
 
 		HRESULT __stdcall DrawPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride) override
@@ -601,6 +603,7 @@ namespace gta4
 			{
 				for (auto it = m_retain.begin(); it != m_retain.end(); ) it = (m_frame_no - it->second.last_frame > 120) ? m_retain.erase(it) : std::next(it);
 				m_static_res.clear();          // re-check resources now and then (pointers get reused after streaming)
+				for (auto it = m_dupe_seen.begin(); it != m_dupe_seen.end(); ) it = (m_frame_no - it->second > 4) ? m_dupe_seen.erase(it) : std::next(it);
 				g_retain_tracked.store(static_cast<std::uint32_t>(m_retain.size()));
 			}
 		}
@@ -657,6 +660,42 @@ namespace gta4
 				return true;
 			}
 			g_retain_sent_static.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+
+		// --- same-frame duplicate filter -----------------------------------------------------------
+		// Some world objects are submitted twice in one frame with identical geometry, transform and
+		// material (e.g. once per render pass). Remix sees the same instance a second time, takes the slow
+		// "dynamic" path and ray traces nothing new. Fixed-function draws only (vertex-shader draws carry
+		// per-draw constants this key cannot see).
+		static inline std::atomic<bool> g_dupe_skip{ false };
+		static inline std::atomic<std::uint64_t> g_dupe_skipped{ 0 };
+		std::unordered_map<std::uint64_t, std::uint32_t> m_dupe_seen;
+		bool dupe_skip(INT base, UINT minv, UINT numv, UINT start, UINT prims)
+		{
+			struct rel { IUnknown* p = nullptr; ~rel() { if (p) p->Release(); } };
+			IDirect3DVertexShader9* vs = nullptr; m_real->GetVertexShader(&vs); rel r_vs{ vs };
+			if (vs) return false;
+			IDirect3DPixelShader9* ps = nullptr; m_real->GetPixelShader(&ps); rel r_ps{ ps };
+			IDirect3DVertexBuffer9* vb = nullptr; UINT off = 0, stride = 0; m_real->GetStreamSource(0, &vb, &off, &stride); rel r_vb{ vb };
+			IDirect3DIndexBuffer9* ib = nullptr; m_real->GetIndices(&ib); rel r_ib{ ib };
+			IDirect3DBaseTexture9* t0 = nullptr; m_real->GetTexture(0, &t0); rel r_t0{ t0 };
+			IDirect3DBaseTexture9* t1 = nullptr; m_real->GetTexture(1, &t1); rel r_t1{ t1 };
+			D3DMATRIX world{}; m_real->GetTransform(D3DTS_WORLD, &world);
+			IDirect3DVertexDeclaration9* decl = nullptr; m_real->GetVertexDeclaration(&decl); rel r_decl{ decl };
+			std::uint64_t h = 1469598103934665603ull;
+			const void* ptrs[6] = { vb, ib, t0, t1, decl, ps };
+			h = fnv(h, ptrs, sizeof(ptrs));
+			const UINT nums[7] = { off, stride, static_cast<UINT>(base), minv, numv, start, prims };
+			h = fnv(h, nums, sizeof(nums));
+			h = fnv(h, &world, sizeof(D3DMATRIX));
+			static constexpr DWORD k_custom_rs[] = { 42, 149, 150, 169, 177, 210, 211, 212, 213, 214, 215, 216, 220 };
+			DWORD rs[sizeof(k_custom_rs) / sizeof(DWORD)] = {};
+			for (size_t i = 0; i < sizeof(k_custom_rs) / sizeof(DWORD); ++i) m_real->GetRenderState(static_cast<D3DRENDERSTATETYPE>(k_custom_rs[i]), &rs[i]);
+			h = fnv(h, rs, sizeof(rs));
+			auto [it, inserted] = m_dupe_seen.try_emplace(h, m_frame_no);
+			if (!inserted && it->second == m_frame_no) { g_dupe_skipped.fetch_add(1, std::memory_order_relaxed); return true; }
+			it->second = m_frame_no;
 			return false;
 		}
 
