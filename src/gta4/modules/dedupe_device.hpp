@@ -663,6 +663,7 @@ namespace gta4
 			return false;
 		}
 
+	public:
 		// --- same-frame duplicate filter -----------------------------------------------------------
 		// Some world objects are submitted twice in one frame with identical geometry, transform and
 		// material (e.g. once per render pass). Remix sees the same instance a second time, takes the slow
@@ -698,6 +699,7 @@ namespace gta4
 			it->second = m_frame_no;
 			return false;
 		}
+	private:
 
 		void note_draw(UINT prims)
 		{
