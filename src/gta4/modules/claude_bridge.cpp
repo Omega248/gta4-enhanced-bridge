@@ -227,7 +227,7 @@ namespace gta4
 	void claude_bridge::write_status()
 	{
 		const auto n = natives::get();
-		const auto pl = n->ConvertIntToPlayerindex(n->GetPlayerId());
+		const auto player = n->ConvertIntToPlayerindex(n->GetPlayerId());
 		const bool playing = n->IsPlayerPlaying(player);
 
 		std::string j = "{\"frame\":" + std::to_string(m_frame) + ",\"playing\":" + (playing ? "true" : "false")
@@ -288,7 +288,7 @@ namespace gta4
 	{
 		const auto n = natives::get();
 		const std::string cmd = s(c, "cmd");
-		const auto pl = n->ConvertIntToPlayerindex(n->GetPlayerId());
+		const auto player = n->ConvertIntToPlayerindex(n->GetPlayerId());
 		const auto ped = player_ped();
 		char buf[512];
 
@@ -327,7 +327,7 @@ namespace gta4
 		if (cmd == "calm")
 		{
 			// repeatable benchmarks: no police, optional fixed wind/traffic. max_wanted=0..6, wind=0.., cars=0..1
-			n->ClearWantedLevel(pl);
+			n->ClearWantedLevel(n->ConvertIntToPlayerindex(n->GetPlayerId()));
 			n->SetMaxWantedLevel(static_cast<uint32_t>(i(c, "max_wanted", 0)));
 			if (has(c, "wind")) n->ForceWind(f(c, "wind"));
 			if (has(c, "cars")) n->SetCarDensityMultiplier(f(c, "cars"));
@@ -467,7 +467,7 @@ namespace gta4
 			const bool on = i(c, "on", 1) != 0;
 			n->SetCharInvincible(ped, on);
 			n->SetMaxWantedLevel(on ? 0 : 6);
-			if (on) n->ClearWantedLevel(pl);
+			if (on) n->ClearWantedLevel(player);
 			reply(c, true, ""); return true;
 		}
 
@@ -596,7 +596,7 @@ namespace gta4
 					start = (in >> v) ? v : 0;
 				}
 				c.args["_idx"] = std::to_string(start); c.args["_caps"] = "0"; c.args["_water"] = "0";
-				n->SetCharInvincible(ped, true); n->SetMaxWantedLevel(0); n->ClearWantedLevel(pl);
+				n->SetCharInvincible(ped, true); n->SetMaxWantedLevel(0); n->ClearWantedLevel(player);
 				n->DisplayHud(false); n->DisplayRadar(false);
 				n->ForceTimeOfDay(13, 0); n->ForceWeatherNow(1);
 				c.step = 1;
