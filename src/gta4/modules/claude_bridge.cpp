@@ -5,6 +5,7 @@
 #include "d3d9_stats.hpp"
 #include "xform_cache.hpp"
 #include "dedupe_device.hpp"
+#include "comp_settings.hpp"
 #include "natives.hpp"
 #include "remix_vars.hpp"
 
@@ -292,6 +293,32 @@ namespace gta4
 
 		// A/B switches for the bridge-traffic optimisations
 		if (cmd == "xform_cache") { xform_cache::g_enabled = i(c, "on", 1) != 0; xform_cache::invalidate(); reply(c, true, ""); return true; }
+		// live-tune compatibility-mod settings (no toml write): cmd=comp nocull_dist_far_static=250 nocull_map_areas=0 ...
+		if (cmd == "comp")
+		{
+			auto gs = comp_settings::get();
+			std::string set_list;
+			auto fset = [&](const char* k, comp_settings::variable& v) { if (has(c, k)) { v.set_var(f(c, k), true); set_list += std::string(set_list.empty() ? "" : ",") + "\"" + k + "\""; } };
+			auto bset = [&](const char* k, comp_settings::variable& v) { if (has(c, k)) { v.set_var(i(c, k) != 0, true); set_list += std::string(set_list.empty() ? "" : ",") + "\"" + k + "\""; } };
+			auto iset = [&](const char* k, comp_settings::variable& v) { if (has(c, k)) { v.set_var(i(c, k), true); set_list += std::string(set_list.empty() ? "" : ",") + "\"" + k + "\""; } };
+			fset("nocull_dist_near_static", gs->nocull_dist_near_static);
+			fset("nocull_dist_medium_static", gs->nocull_dist_medium_static);
+			fset("nocull_radius_medium_static", gs->nocull_radius_medium_static);
+			fset("nocull_dist_far_static", gs->nocull_dist_far_static);
+			fset("nocull_radius_far_static", gs->nocull_radius_far_static);
+			fset("nocull_height_far_static", gs->nocull_height_far_static);
+			fset("nocull_dist_lights", gs->nocull_dist_lights);
+			fset("nocull_dist_sphere_interior", gs->nocull_dist_sphere_interior);
+			bset("nocull_extended", gs->nocull_extended);
+			bset("nocull_extended_auto", gs->nocull_extended_auto);
+			fset("nocull_extended_dist", gs->nocull_extended_dist);
+			fset("nocull_extended_radius", gs->nocull_extended_radius);
+			fset("nocull_extended_height", gs->nocull_extended_height);
+			bset("nocull_map_areas", gs->nocull_map_areas);
+			iset("nocull_map_areas_count", gs->nocull_map_areas_count);
+			bset("nocull_map_areas_high_lod_logic", gs->nocull_map_areas_high_lod_logic);
+			reply(c, true, "\"set\":[" + set_list + "]"); return true;
+		}
 		if (cmd == "dedupe") { dedupe_device::g_enabled = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 		if (cmd == "d3d_stats") { d3d9_stats::g_enabled = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 
