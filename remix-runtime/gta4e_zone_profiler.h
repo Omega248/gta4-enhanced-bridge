@@ -101,7 +101,7 @@ namespace gta4e {
         const uint64_t t = s->ticks.load(), c = s->calls.load();
         const uint64_t dt = t - s->lastTicks, dc = c - s->lastCalls;
         s->lastTicks = t; s->lastCalls = c;
-        if (!frameSite && std::strcmp(s->name, "injectRTX") == 0) frameSite = s;
+        if (!frameSite && std::strstr(s->name, "D3D9SwapChainEx::Present") && !std::strstr(s->name, "PresentImage")) frameSite = s;
         if (s == frameSite) frames = double(dc);
         if (dc) rows.push_back({ s->name, double(dt) / tpm, dc });
       }

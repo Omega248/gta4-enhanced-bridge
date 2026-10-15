@@ -1,0 +1,21 @@
+diff --git a/src/dxvk/rtx_render/rtx_accel_manager.cpp b/src/dxvk/rtx_render/rtx_accel_manager.cpp
+index 7de2684..4e41d93 100644
+--- a/src/dxvk/rtx_render/rtx_accel_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_accel_manager.cpp
+@@ -88,8 +88,14 @@ namespace dxvk {
+       return;
+     }
+ 
+-    m_cachedBuckets.clear();
+-    m_instanceBucketIndex.clear();
++    // gta4e: do NOT drop the whole bucket cache when one cached instance dies. GTA IV retires
++    // instances every frame (LOD swaps, streaming, culling), which used to wipe the cache and
++    // rebuild every merged BLAS (~700k triangles) every frame. The per-bucket dirty scan in
++    // mergeInstancesIntoBlas already detects removed instances by pointer lookup in the live
++    // instance set (no dereference) plus a cache-identity check against ABA reuse, so only the
++    // bucket that contained this instance gets rebuilt. Forcing the generation check makes sure
++    // the full-skip fast path cannot run with a stale bucket.
++    GTA4E_COUNT("buckets.instance_evictions", 1);
+     m_lastProcessedGeneration = UINT64_MAX;
+   }
+ 
