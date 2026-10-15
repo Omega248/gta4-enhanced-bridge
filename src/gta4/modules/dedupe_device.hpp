@@ -82,6 +82,20 @@ namespace gta4
 		static inline std::atomic<std::uint64_t> g_bt_draw{ 0 }, g_bt_present{ 0 }, g_bt_set{ 0 };
 		static inline std::atomic<bool> g_bt_on{ true };
 		static inline std::atomic<bool> g_bt_wrap_swapchain{ true };
+		// cost probe: extra commands per draw (pad_rs = render-state sets, pad_vsc = 1-register VS constant sets)
+		static inline std::atomic<int> g_pad_rs{ 0 }, g_pad_vsc{ 0 };
+		DWORD m_pad_toggle = 0;
+		void pad()
+		{
+			const int r = g_pad_rs.load(std::memory_order_relaxed), v = g_pad_vsc.load(std::memory_order_relaxed);
+			for (int i = 0; i < r; ++i) m_real->SetRenderState(static_cast<D3DRENDERSTATETYPE>(230), ++m_pad_toggle);
+			if (v > 0)
+			{
+				float save[4]; m_real->GetVertexShaderConstantF(255, save, 1);
+				for (int i = 0; i < v; ++i) { const float x[4] = { static_cast<float>(++m_pad_toggle), 0, 0, 0 }; m_real->SetVertexShaderConstantF(255, x, 1); }
+				m_real->SetVertexShaderConstantF(255, save, 1);
+			}
+		}
 		static std::int64_t qpc() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
 		static std::string bridge_time_json(double frames)
 		{
@@ -377,7 +391,7 @@ namespace gta4
 
 		HRESULT __stdcall DrawIndexedPrimitive(D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) override
 		{ if (g_retain.load(std::memory_order_relaxed) && retain_skip(BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount)) return D3D_OK;
-			note_draw(primCount); bt_scope _t(g_bt_draw); return m_real->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
+			note_draw(primCount); pad(); bt_scope _t(g_bt_draw); return m_real->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
 
 		HRESULT __stdcall DrawPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride) override
 		{ note_draw(PrimitiveCount); return m_real->DrawPrimitiveUP(PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride); }

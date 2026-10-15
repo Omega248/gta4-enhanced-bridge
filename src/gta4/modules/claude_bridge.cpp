@@ -361,6 +361,7 @@ namespace gta4
 			return true;
 		}
 
+		if (cmd == "pad") { dedupe_device::g_pad_rs = i(c, "rs", 0); dedupe_device::g_pad_vsc = i(c, "vsc", 0); reply(c, true, ""); return true; }
 		if (cmd == "bridge_time") { dedupe_device::g_bt_on = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 		if (cmd == "pass_stats") { dedupe_device::g_pass_stats = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 
