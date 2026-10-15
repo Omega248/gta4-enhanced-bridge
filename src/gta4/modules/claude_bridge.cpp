@@ -275,6 +275,7 @@ namespace gta4
 			}
 			j += ",\"passes\":" + dedupe_device::pass_json(static_cast<double>(m_frame - last_frame));
 			j += ",\"retain\":" + dedupe_device::retain_json(static_cast<double>(m_frame - last_frame));
+			j += ",\"bridge_time\":" + dedupe_device::bridge_time_json(static_cast<double>(m_frame - last_frame));
 			j += ",\"d3d\":" + d3d9_stats::take_json(wall);
 			last = now; last_frame = m_frame;
 		}
@@ -359,6 +360,7 @@ namespace gta4
 			return true;
 		}
 
+		if (cmd == "bridge_time") { dedupe_device::g_bt_on = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 		if (cmd == "pass_stats") { dedupe_device::g_pass_stats = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 
 		if (cmd == "affinity")

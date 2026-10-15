@@ -76,6 +76,22 @@ namespace gta4
 			return b;
 		}
 
+		// time spent inside the bridge client (m_real) for draws and Present, to split the render-thread
+		// cost between the compatibility mod's per-draw work and the bridge/Remix side
+		static inline std::atomic<std::uint64_t> g_bt_draw{ 0 }, g_bt_present{ 0 }, g_bt_set{ 0 };
+		static inline std::atomic<bool> g_bt_on{ true };
+		static std::int64_t qpc() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
+		static std::string bridge_time_json(double frames)
+		{
+			LARGE_INTEGER f; QueryPerformanceFrequency(&f);
+			const double k = 1000.0 / static_cast<double>(f.QuadPart) / (frames > 0 ? frames : 1.0); char b[160];
+			sprintf_s(b, "{\"draw_ms\":%.2f,\"present_ms\":%.2f,\"setters_ms\":%.2f}",
+				g_bt_draw.exchange(0) * k, g_bt_present.exchange(0) * k, g_bt_set.exchange(0) * k);
+			return b;
+		}
+		struct bt_scope { std::atomic<std::uint64_t>& a; std::int64_t t0; explicit bt_scope(std::atomic<std::uint64_t>& x) : a(x), t0(g_bt_on.load(std::memory_order_relaxed) ? qpc() : 0) {}
+			~bt_scope() { if (t0) a.fetch_add(static_cast<std::uint64_t>(qpc() - t0), std::memory_order_relaxed); } };
+
 		explicit dedupe_device(IDirect3DDevice9* real) : m_real(real) { invalidate(); m_pass = pass_index("backbuffer"); }
 		IDirect3DDevice9* real() const { return m_real; }
 
@@ -137,7 +153,7 @@ namespace gta4
 		{ invalidate(); return m_real->Reset(pPresentationParameters); }
 
 		HRESULT __stdcall Present(CONST RECT* pSourceRect, CONST RECT* pDestRect, HWND hDestWindowOverride, CONST RGNDATA* pDirtyRegion) override
-		{ on_present(); return m_real->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion); }
+		{ on_present(); bt_scope _t(g_bt_present); return m_real->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion); }
 
 		HRESULT __stdcall GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) override
 		{ return m_real->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer); }
@@ -263,7 +279,7 @@ namespace gta4
 
 		HRESULT __stdcall SetRenderState(D3DRENDERSTATETYPE State, DWORD Value) override
 		{ if (State == D3DRS_COLORWRITEENABLE) m_colorwrite = Value;
-			if (on() && m_rs.same(State, Value)) return skip(S_RS); m_rs.put(State, Value); return m_real->SetRenderState(State, Value); }
+			if (on() && m_rs.same(State, Value)) return skip(S_RS); m_rs.put(State, Value); { bt_scope _t(g_bt_set); return m_real->SetRenderState(State, Value); } }
 
 		HRESULT __stdcall GetRenderState(D3DRENDERSTATETYPE State, DWORD* pValue) override
 		{ return m_real->GetRenderState(State, pValue); }
@@ -287,7 +303,7 @@ namespace gta4
 		{ return m_real->GetTexture(Stage, ppTexture); }
 
 		HRESULT __stdcall SetTexture(DWORD Stage, IDirect3DBaseTexture9* pTexture) override
-		{ if (on() && m_tex.same(Stage, reinterpret_cast<std::uintptr_t>(pTexture))) return skip(S_TEX); m_tex.put(Stage, reinterpret_cast<std::uintptr_t>(pTexture)); return m_real->SetTexture(Stage, pTexture); }
+		{ if (on() && m_tex.same(Stage, reinterpret_cast<std::uintptr_t>(pTexture))) return skip(S_TEX); m_tex.put(Stage, reinterpret_cast<std::uintptr_t>(pTexture)); { bt_scope _t(g_bt_set); return m_real->SetTexture(Stage, pTexture); } }
 
 		HRESULT __stdcall GetTextureStageState(DWORD Stage, D3DTEXTURESTAGESTATETYPE Type, DWORD* pValue) override
 		{ return m_real->GetTextureStageState(Stage, Type, pValue); }
@@ -332,11 +348,11 @@ namespace gta4
 		{ return m_real->SetNPatchMode(nSegments); }
 
 		HRESULT __stdcall DrawPrimitive(D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount) override
-		{ note_draw(PrimitiveCount); return m_real->DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount); }
+		{ note_draw(PrimitiveCount); bt_scope _t(g_bt_draw); return m_real->DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount); }
 
 		HRESULT __stdcall DrawIndexedPrimitive(D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) override
 		{ if (g_retain.load(std::memory_order_relaxed) && retain_skip(BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount)) return D3D_OK;
-			note_draw(primCount); return m_real->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
+			note_draw(primCount); bt_scope _t(g_bt_draw); return m_real->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount); }
 
 		HRESULT __stdcall DrawPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride) override
 		{ note_draw(PrimitiveCount); return m_real->DrawPrimitiveUP(PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride); }
@@ -372,7 +388,7 @@ namespace gta4
 		{ return m_real->GetVertexShader(ppShader); }
 
 		HRESULT __stdcall SetVertexShaderConstantF(UINT StartRegister, CONST float* pConstantData, UINT Vector4fCount) override
-		{ if (on() && m_vsc.same(StartRegister, pConstantData, Vector4fCount)) return skip(S_CONST); m_vsc.put(StartRegister, pConstantData, Vector4fCount); return m_real->SetVertexShaderConstantF(StartRegister, pConstantData, Vector4fCount); }
+		{ if (on() && m_vsc.same(StartRegister, pConstantData, Vector4fCount)) return skip(S_CONST); m_vsc.put(StartRegister, pConstantData, Vector4fCount); { bt_scope _t(g_bt_set); return m_real->SetVertexShaderConstantF(StartRegister, pConstantData, Vector4fCount); } }
 
 		HRESULT __stdcall GetVertexShaderConstantF(UINT StartRegister, float* pConstantData, UINT Vector4fCount) override
 		{ return m_real->GetVertexShaderConstantF(StartRegister, pConstantData, Vector4fCount); }
@@ -391,7 +407,7 @@ namespace gta4
 
 		HRESULT __stdcall SetStreamSource(UINT StreamNumber, IDirect3DVertexBuffer9* pStreamData, UINT OffsetInBytes, UINT Stride) override
 		{ if (StreamNumber < 16 && on() && m_vb[StreamNumber].valid && m_vb[StreamNumber].vb == pStreamData && m_vb[StreamNumber].off == OffsetInBytes && m_vb[StreamNumber].stride == Stride) return skip(S_VB);
-			if (StreamNumber < 16) m_vb[StreamNumber] = { pStreamData, OffsetInBytes, Stride, true }; return m_real->SetStreamSource(StreamNumber, pStreamData, OffsetInBytes, Stride); }
+			if (StreamNumber < 16) m_vb[StreamNumber] = { pStreamData, OffsetInBytes, Stride, true }; { bt_scope _t(g_bt_set); return m_real->SetStreamSource(StreamNumber, pStreamData, OffsetInBytes, Stride); } }
 
 		HRESULT __stdcall GetStreamSource(UINT StreamNumber, IDirect3DVertexBuffer9** ppStreamData, UINT* OffsetInBytes, UINT* pStride) override
 		{ return m_real->GetStreamSource(StreamNumber, ppStreamData, OffsetInBytes, pStride); }
@@ -403,7 +419,7 @@ namespace gta4
 		{ return m_real->GetStreamSourceFreq(StreamNumber, Divider); }
 
 		HRESULT __stdcall SetIndices(IDirect3DIndexBuffer9* pIndexData) override
-		{ if (on() && m_ib_valid && m_ib == pIndexData) return skip(S_IB); m_ib = pIndexData; m_ib_valid = true; return m_real->SetIndices(pIndexData); }
+		{ if (on() && m_ib_valid && m_ib == pIndexData) return skip(S_IB); m_ib = pIndexData; m_ib_valid = true; { bt_scope _t(g_bt_set); return m_real->SetIndices(pIndexData); } }
 
 		HRESULT __stdcall GetIndices(IDirect3DIndexBuffer9** ppIndexData) override
 		{ return m_real->GetIndices(ppIndexData); }
@@ -418,7 +434,7 @@ namespace gta4
 		{ return m_real->GetPixelShader(ppShader); }
 
 		HRESULT __stdcall SetPixelShaderConstantF(UINT StartRegister, CONST float* pConstantData, UINT Vector4fCount) override
-		{ if (on() && m_psc.same(StartRegister, pConstantData, Vector4fCount)) return skip(S_CONST); m_psc.put(StartRegister, pConstantData, Vector4fCount); return m_real->SetPixelShaderConstantF(StartRegister, pConstantData, Vector4fCount); }
+		{ if (on() && m_psc.same(StartRegister, pConstantData, Vector4fCount)) return skip(S_CONST); m_psc.put(StartRegister, pConstantData, Vector4fCount); { bt_scope _t(g_bt_set); return m_real->SetPixelShaderConstantF(StartRegister, pConstantData, Vector4fCount); } }
 
 		HRESULT __stdcall GetPixelShaderConstantF(UINT StartRegister, float* pConstantData, UINT Vector4fCount) override
 		{ return m_real->GetPixelShaderConstantF(StartRegister, pConstantData, Vector4fCount); }
