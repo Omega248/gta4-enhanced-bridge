@@ -1,4 +1,5 @@
 ﻿#include "std_include.hpp"
+#include "vs_stats.hpp"
 #include "xform_cache.hpp"
 #include "renderer.hpp"
 
@@ -2814,6 +2815,15 @@ namespace gta4
 
 			if (!render_with_ff) {
 				im->m_stats._drawcall_indexed_prim_using_vs.track_single();
+			}
+
+			if (!shared::globals::imgui_is_rendering)
+			{
+				using namespace vs_stats;
+				const int cat = g_is_sky_rendering ? C_SKY : g_is_water_rendering ? C_WATER : g_is_rendering_mirror ? C_MIRROR
+					: (g_is_rendering_fx || g_is_rendering_fx_instance) ? C_FX : g_is_rendering_vehicle ? C_VEHICLE
+					: g_is_instance_rendering ? C_INSTANCE : g_is_rendering_static ? C_STATIC : C_OTHER;
+				vs_stats::track(cat, static_cast<int>(pidx), ctx.info.shader_name, primCount, render_with_ff);
 			}
 
 #if DEBUG
