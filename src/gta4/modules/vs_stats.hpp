@@ -15,6 +15,7 @@ namespace gta4::vs_stats
 	enum cat : int { C_STATIC, C_VEHICLE, C_INSTANCE, C_FX, C_SKY, C_WATER, C_MIRROR, C_OTHER, C_COUNT };
 	inline const char* cat_name[C_COUNT] = { "static", "vehicle", "instance", "fx", "sky", "water", "mirror", "other" };
 	inline std::atomic<std::uint32_t> g_cat[C_COUNT];
+	inline std::atomic<std::uint32_t> g_skip_mask{ 0 };   // test: do not send vertex-shader draws of these categories (bit = cat)
 	inline std::atomic<std::uint32_t> g_cat_ff[C_COUNT];
 	inline std::atomic<std::uint32_t> g_preset[256];
 	inline std::atomic<std::uint32_t> g_prims[256];

@@ -2804,8 +2804,18 @@ namespace gta4
 			return hr;
 		}
 
+		int vs_cat = vs_stats::C_OTHER;
+		if (!shared::globals::imgui_is_rendering)
+		{
+			using namespace vs_stats;
+			vs_cat = g_is_sky_rendering ? C_SKY : g_is_water_rendering ? C_WATER : g_is_rendering_mirror ? C_MIRROR
+				: (g_is_rendering_fx || g_is_rendering_fx_instance) ? C_FX : g_is_rendering_vehicle ? C_VEHICLE
+				: g_is_instance_rendering ? C_INSTANCE : g_is_rendering_static ? C_STATIC : C_OTHER;
+		}
+		const bool vs_skip = !render_with_ff && !shared::globals::imgui_is_rendering && (vs_stats::g_skip_mask.load(std::memory_order_relaxed) & (1u << vs_cat));
+
 		// do not render next surface if set
-		if (!ctx.modifiers.do_not_render && !ctx.modifiers.do_not_render_indexed_primitives) 
+		if (!vs_skip && !ctx.modifiers.do_not_render && !ctx.modifiers.do_not_render_indexed_primitives) 
 		{
 			hr = dev->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
 
@@ -2817,13 +2827,8 @@ namespace gta4
 				im->m_stats._drawcall_indexed_prim_using_vs.track_single();
 			}
 
-			if (!shared::globals::imgui_is_rendering)
-			{
-				using namespace vs_stats;
-				const int cat = g_is_sky_rendering ? C_SKY : g_is_water_rendering ? C_WATER : g_is_rendering_mirror ? C_MIRROR
-					: (g_is_rendering_fx || g_is_rendering_fx_instance) ? C_FX : g_is_rendering_vehicle ? C_VEHICLE
-					: g_is_instance_rendering ? C_INSTANCE : g_is_rendering_static ? C_STATIC : C_OTHER;
-				vs_stats::track(cat, static_cast<int>(pidx), ctx.info.shader_name, primCount, render_with_ff);
+			if (!shared::globals::imgui_is_rendering) {
+				vs_stats::track(vs_cat, static_cast<int>(pidx), ctx.info.shader_name, primCount, render_with_ff);
 			}
 
 #if DEBUG
