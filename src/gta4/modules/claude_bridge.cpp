@@ -1,4 +1,5 @@
 ﻿#include "std_include.hpp"
+#include <thread>
 #include <deque>
 #include <shlobj.h>
 #include "claude_bridge.hpp"
@@ -666,6 +667,28 @@ namespace gta4
 		p_this = this;
 		init_dirs();
 		m_initialized = true;
+
+		// Kill switch on its own thread, so it works even when the render thread is stuck (GPU hang,
+		// Remix bridge waiting on Present): creating <bridge>/kill ends the game process immediately.
+		if (m_ready)
+		{
+			const auto dir = m_dir;
+			std::thread([dir]
+			{
+				std::error_code ec;
+				std::filesystem::remove(dir / "kill", ec);
+				for (;;)
+				{
+					Sleep(1000);
+					if (std::filesystem::exists(dir / "kill", ec))
+					{
+						std::filesystem::remove(dir / "kill", ec);
+						write_atomic(dir / "killed.txt", "killed by bridge kill switch\n");
+						TerminateProcess(GetCurrentProcess(), 0);
+					}
+				}
+			}).detach();
+		}
 		shared::common::log("ClaudeBridge", "Module initialized.", shared::common::LOG_TYPE::LOG_TYPE_DEFAULT, false);
 	}
 }
