@@ -148,14 +148,14 @@ namespace gta4
 		// the game presents through the swap chain: hand out a thin wrapper that times Present
 		struct timed_swapchain final : IDirect3DSwapChain9
 		{
-			IDirect3DSwapChain9* r; IDirect3DDevice9* dev; ULONG refs = 1;
-			timed_swapchain(IDirect3DSwapChain9* real, IDirect3DDevice9* d) : r(real), dev(d) {}
+			IDirect3DSwapChain9* r; dedupe_device* dev; ULONG refs = 1;
+			timed_swapchain(IDirect3DSwapChain9* real, dedupe_device* d) : r(real), dev(d) {}
 			HRESULT __stdcall QueryInterface(REFIID riid, void** ppv) override
 			{ if (riid == __uuidof(IDirect3DSwapChain9) || riid == __uuidof(IUnknown)) { *ppv = this; AddRef(); return S_OK; } return r->QueryInterface(riid, ppv); }
 			ULONG __stdcall AddRef() override { r->AddRef(); return ++refs; }
 			ULONG __stdcall Release() override { const ULONG n = --refs; r->Release(); if (!n) delete this; return n; }
 			HRESULT __stdcall Present(CONST RECT* a, CONST RECT* b, HWND c, CONST RGNDATA* d, DWORD e) override
-			{ bt_scope _t(g_bt_present); return r->Present(a, b, c, d, e); }
+			{ dev->on_present(); bt_scope _t(g_bt_present); return r->Present(a, b, c, d, e); }
 			HRESULT __stdcall GetFrontBufferData(IDirect3DSurface9* p) override { return r->GetFrontBufferData(p); }
 			HRESULT __stdcall GetBackBuffer(UINT i, D3DBACKBUFFER_TYPE t, IDirect3DSurface9** p) override { return r->GetBackBuffer(i, t, p); }
 			HRESULT __stdcall GetRasterStatus(D3DRASTER_STATUS* p) override { return r->GetRasterStatus(p); }
