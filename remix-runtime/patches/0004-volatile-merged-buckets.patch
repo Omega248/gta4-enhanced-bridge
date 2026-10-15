@@ -1,0 +1,83 @@
+diff --git a/src/dxvk/rtx_render/rtx_accel_manager.cpp b/src/dxvk/rtx_render/rtx_accel_manager.cpp
+index 4e41d93..76ce176 100644
+--- a/src/dxvk/rtx_render/rtx_accel_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_accel_manager.cpp
+@@ -69,6 +69,7 @@ namespace dxvk {
+     m_cachedBuckets.clear();
+     m_instanceBucketIndex.clear();
+     m_cachedDynamicBlasEntries.clear();
++    m_gta4eLastDirtyFrame.clear();
+     resetUniqueDynamicBlasGroups();
+     m_lastProcessedGeneration = UINT64_MAX;
+     m_ommBindPending = false;
+@@ -84,6 +85,7 @@ namespace dxvk {
+   }
+ 
+   void AccelManager::removeInstanceFromBucketCache(RtInstance* instance) {
++    m_gta4eLastDirtyFrame.erase(instance);
+     if (m_instanceBucketIndex.erase(instance) == 0) {
+       return;
+     }
+@@ -798,6 +800,19 @@ namespace dxvk {
+         bucketKey.instanceFlags = instance->getVkInstance().flags;
+         bucketKey.usesUnorderedApproximations = instance->usesUnorderedApproximations();
+         bucketKey.isSubsurface = instance->isSubsurface();
++        {
++          const bool dirtyNow = instance->isBlasDirty() || blasEntry->frameLastUpdated == currentFrame;
++          auto it = m_gta4eLastDirtyFrame.find(instance);
++          if (it == m_gta4eLastDirtyFrame.end()) {
++            it = m_gta4eLastDirtyFrame.emplace(instance, currentFrame).first;
++          } else if (dirtyNow) {
++            it->second = currentFrame;
++          }
++          constexpr uint32_t kVolatileWindowFrames = 90;
++          bucketKey.volatileTier = (currentFrame - it->second < kVolatileWindowFrames) ? 1 : 0;
++          if (bucketKey.volatileTier) GTA4E_COUNT("buckets.assign_volatile", 1);
++          else GTA4E_COUNT("buckets.assign_stable", 1);
++        }
+ 
+         bool merged = false;
+         auto bucketIt = bucketMap.find(bucketKey);
+diff --git a/src/dxvk/rtx_render/rtx_accel_manager.h b/src/dxvk/rtx_render/rtx_accel_manager.h
+index ceb049d..ee1a93b 100644
+--- a/src/dxvk/rtx_render/rtx_accel_manager.h
++++ b/src/dxvk/rtx_render/rtx_accel_manager.h
+@@ -81,7 +81,7 @@ class AccelManager : public CommonDeviceObject {
+     uint8_t instanceMask = 0;
+     bool usesUnorderedApproximations = false;
+     bool isSubsurface = false;
+-    uint8_t pad = 0;
++    uint8_t volatileTier = 0; // gta4e: recently-changing instances get their own merged buckets
+ 
+     bool operator==(const BlasBucketKey& other) const {
+       return instanceMask == other.instanceMask &&
+@@ -89,7 +89,8 @@ class AccelManager : public CommonDeviceObject {
+              customIndexFlags == other.customIndexFlags &&
+              instanceFlags == other.instanceFlags &&
+              usesUnorderedApproximations == other.usesUnorderedApproximations &&
+-             isSubsurface == other.isSubsurface;
++             isSubsurface == other.isSubsurface &&
++             volatileTier == other.volatileTier;
+     }
+   };
+ 
+@@ -102,7 +103,7 @@ class AccelManager : public CommonDeviceObject {
+           &BlasBucketKey::instanceMask,
+           &BlasBucketKey::usesUnorderedApproximations,
+           &BlasBucketKey::isSubsurface,
+-          &BlasBucketKey::pad>(k));
++          &BlasBucketKey::volatileTier>(k));
+     }
+   };
+ 
+@@ -278,6 +279,10 @@ private:
+   // Set of BlasEntry* that went to the dynamic path on the last full rebuild.
+   // Used for quick O(1) per-instance classification on the dynamics-only path.
+   std::unordered_set<BlasEntry*> m_cachedDynamicBlasEntries;
++  // gta4e: frame each instance last changed (BLAS dirty / geometry updated / first seen). Instances
++  // that changed within the last few seconds go into separate "volatile" merged buckets, so a
++  // handful of animated or streaming objects no longer dirty the big static buckets every frame.
++  std::unordered_map<const RtInstance*, uint32_t> m_gta4eLastDirtyFrame;
+ 
+   // Scratch containers for collecting dynamic BLAS groups during mergeInstancesIntoBlas().
+   // The map is lookup-only; the vector preserves first-seen emission order.
