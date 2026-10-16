@@ -50,7 +50,7 @@ jobs:
         Copy-Item remix-runtime\gta4e_zone_profiler.h remix\src\dxvk\gta4e_zone_profiler.h
         Get-ChildItem remix-runtime\patches\*.patch | Sort-Object Name | ForEach-Object {
           Write-Host "applying $($_.Name)"
-          git -C remix apply --whitespace=nowarn --verbose $_.FullName
+          git -C remix apply --whitespace=nowarn --ignore-whitespace --verbose $_.FullName
           if ($LASTEXITCODE -ne 0) { throw "patch failed: $($_.Name)" }
         }
 

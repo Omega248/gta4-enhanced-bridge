@@ -1,4 +1,4 @@
-From b88ff91c301c94503f8a35553d3428de5d907773 Mon Sep 17 00:00:00 2001
+From 296b4ab20d0dd4a57c5a981b69239486ceb54335 Mon Sep 17 00:00:00 2001
 From: gta4e <gta4e@local>
 Date: Fri, 16 Oct 2026 23:25:15 +0100
 Subject: [PATCH] p9
@@ -218,20 +218,21 @@ index 3cc86cd..b0962f7 100644
  
      struct OpacityMicromap {
 diff --git a/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h b/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h
-index ec4e860..b90d37b 100644
+index ec4e860..391a773 100644
 --- a/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h
 +++ b/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h
-@@ -56,4 +56,9 @@ struct SkinningArgs {
-   uint useIndices;
-   uint numBones;
-   uint useOctahedralNormals;
-+
+@@ -52,6 +52,11 @@ struct SkinningArgs {
+   uint blendIndicesOffset;
+   uint blendIndicesStride;
+ 
 +  uint weightsUnorm8;   // gta4e: blend weights are 4 x UNORM8 (D3DCOLOR) instead of floats
 +  uint weightSwizzle;   // gta4e: 0 = D3DCOLOR channel order (b2,b1,b0,b3), 1 = memory order
-+  uint pad0;
-+  uint pad1;
- };
-\ No newline at end of file
++  uint gta4ePad0;
++  uint gta4ePad1;
++
+   uint numVertices;
+   uint useIndices;
+   uint numBones;
 diff --git a/src/dxvk/shaders/rtx/pass/skinning.h b/src/dxvk/shaders/rtx/pass/skinning.h
 index 3b89352..372a24f 100644
 --- a/src/dxvk/shaders/rtx/pass/skinning.h
