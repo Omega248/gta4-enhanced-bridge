@@ -1,0 +1,26 @@
+From 116629d707fd2c75cd7072602e3443ea43362438 Mon Sep 17 00:00:00 2001
+From: gta4e <gta4e@local>
+Date: Sat, 17 Oct 2026 00:30:35 +0100
+Subject: [PATCH] p10
+
+---
+ src/dxvk/rtx_render/rtx_geometry_utils.h | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/dxvk/rtx_render/rtx_geometry_utils.h b/src/dxvk/rtx_render/rtx_geometry_utils.h
+index 862d905..eb4a305 100644
+--- a/src/dxvk/rtx_render/rtx_geometry_utils.h
++++ b/src/dxvk/rtx_render/rtx_geometry_utils.h
+@@ -201,6 +201,9 @@ namespace dxvk {
+     inline void flushCommandList() {
+       if (m_skinningContext->getCommandList() != nullptr && m_skinningCommands > 0) {
+         m_skinningContext->flushCommandList();
++        // gta4e: reset, otherwise every later flush submits an (empty) skinning command list forever,
++        // doubling queue submissions and stalling the CS thread once any mesh was skinned
++        m_skinningCommands = 0;
+       }
+     }
+ 
+-- 
+2.43.0
+
