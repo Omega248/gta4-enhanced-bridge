@@ -206,7 +206,18 @@ namespace gta4
 			if (dib && bits)
 			{
 				const HGDIOBJ old = SelectObject(mem, dib);
-				ok = BitBlt(mem, 0, 0, w, h, screen, tl.x, tl.y, SRCCOPY | CAPTUREBLT) != 0;
+				// first ask DWM for the window's own content (works while other windows cover the game),
+				// fall back to copying the screen if that comes back black
+				const int stride0 = ((w * 3 + 3) / 4) * 4;
+				ok = PrintWindow(hwnd, mem, PW_CLIENTONLY | 0x2 /*PW_RENDERFULLCONTENT*/) != 0;
+				if (ok)
+				{
+					GdiFlush();
+					const auto* px = static_cast<const unsigned char*>(bits); size_t lit = 0;
+					for (int yy = 0; yy < h; yy += 16) for (int xx = 0; xx < w; xx += 16) { const auto* q = px + yy * stride0 + xx * 3; if (q[0] + q[1] + q[2] > 24) ++lit; }
+					ok = lit > 16;
+				}
+				if (!ok) ok = BitBlt(mem, 0, 0, w, h, screen, tl.x, tl.y, SRCCOPY | CAPTUREBLT) != 0;
 				SelectObject(mem, old);
 				if (ok)
 				{
