@@ -1,20 +1,20 @@
-From 296b4ab20d0dd4a57c5a981b69239486ceb54335 Mon Sep 17 00:00:00 2001
+From b924a28976f7b776ee98cffd7eaaf3057f7e7866 Mon Sep 17 00:00:00 2001
 From: gta4e <gta4e@local>
 Date: Fri, 16 Oct 2026 23:25:15 +0100
 Subject: [PATCH] p9
 
 ---
- src/d3d9/d3d9_rtx.cpp                         | 102 +++++++++++++++++-
+ src/d3d9/d3d9_rtx.cpp                         | 156 +++++++++++++++++-
  src/d3d9/d3d9_rtx.h                           |   4 +
  src/d3d9/d3d9_rtx_geometry.cpp                |   2 +-
  src/dxvk/rtx_render/rtx_geometry_utils.cpp    |   5 +
- src/dxvk/rtx_render/rtx_options.h             |   4 +
+ src/dxvk/rtx_render/rtx_options.h             |   6 +
  .../rtx/pass/gpu_skinning_binding_indices.h   |   5 +
- src/dxvk/shaders/rtx/pass/skinning.h          |  20 +++-
- 7 files changed, 134 insertions(+), 8 deletions(-)
+ src/dxvk/shaders/rtx/pass/skinning.h          |  20 ++-
+ 7 files changed, 190 insertions(+), 8 deletions(-)
 
 diff --git a/src/d3d9/d3d9_rtx.cpp b/src/d3d9/d3d9_rtx.cpp
-index 708433e..e9c2a05 100644
+index 708433e..7d401d2 100644
 --- a/src/d3d9/d3d9_rtx.cpp
 +++ b/src/d3d9/d3d9_rtx.cpp
 @@ -7,6 +7,7 @@
@@ -66,7 +66,7 @@ index 708433e..e9c2a05 100644
        m_activeDrawCallState.programmableVertexShaderInfo = d3d9State().vertexShader->GetCommonShader()->GetInfo();
      }
      
-@@ -930,6 +939,91 @@ namespace dxvk {
+@@ -930,6 +939,145 @@ namespace dxvk {
      });
    }
  
@@ -114,7 +114,61 @@ index 708433e..e9c2a05 100644
 +      m[1] = Vector4(r0.y, r1.y, r2.y, 0.f);
 +      m[2] = Vector4(r0.z, r1.z, r2.z, 0.f);
 +      m[3] = Vector4(r0.w, r1.w, r2.w, 1.f);
-+      bones[b] = world * m;
++      switch (RtxOptions::Gta4e::vsSkinningBoneMode()) {
++      default:
++      case 0: bones[b] = world * m; break;
++      case 1: bones[b] = world; break;
++      case 2: bones[b] = m; break;
++      case 3: {
++        Matrix4 t;   // rows used as columns instead
++        t[0] = Vector4(r0.x, r0.y, r0.z, 0.f);
++        t[1] = Vector4(r1.x, r1.y, r1.z, 0.f);
++        t[2] = Vector4(r2.x, r2.y, r2.z, 0.f);
++        t[3] = Vector4(r0.w, r1.w, r2.w, 1.f);
++        bones[b] = world * t; break;
++      }
++      }
++    }
++
++    // debug dump: matrices, the first vertex and its CPU-skinned position
++    static uint32_t s_dbgArmed = 0, s_dbgLeft = 0;
++    if (const uint32_t dbg = RtxOptions::Gta4e::vsSkinningDebugLog(); dbg != s_dbgArmed) {
++      s_dbgArmed = dbg;
++      s_dbgLeft = dbg;
++    }
++    if (s_dbgLeft > 0) {
++      --s_dbgLeft;
++      auto f4 = [](const Vector4& v) { return str::format("(", v.x, " ", v.y, " ", v.z, " ", v.w, ")"); };
++      Logger::info(str::format("[gta4e skin] verts=", geoData.vertexCount, " maxBones=", maxBones,
++        " posFmt=", (uint32_t) geoData.positionBuffer.vertexFormat(), " posStride=", geoData.positionBuffer.stride(),
++        " bwFmt=", (uint32_t) geoData.blendWeightBuffer.vertexFormat(), " bwOff=", geoData.blendWeightBuffer.offsetFromSlice(), " bwStride=", geoData.blendWeightBuffer.stride(),
++        " biFmt=", (uint32_t) geoData.blendIndicesBuffer.vertexFormat(), " biOff=", geoData.blendIndicesBuffer.offsetFromSlice(),
++        " nFmt=", (uint32_t) geoData.normalBuffer.vertexFormat()));
++      Logger::info(str::format("[gta4e skin] world c0..3 ", f4(world[0]), f4(world[1]), f4(world[2]), f4(world[3])));
++      if (maxBones > 0) {
++        Logger::info(str::format("[gta4e skin] c", base, " ", f4(consts[base]), f4(consts[base + 1]), f4(consts[base + 2])));
++        Logger::info(str::format("[gta4e skin] bone0 ", f4(bones[0][0]), f4(bones[0][1]), f4(bones[0][2]), f4(bones[0][3])));
++      }
++      const uint8_t* pp = (const uint8_t*) geoData.positionBuffer.mapPtr(geoData.positionBuffer.offsetFromSlice());
++      const uint8_t* pw = (const uint8_t*) geoData.blendWeightBuffer.mapPtr(geoData.blendWeightBuffer.offsetFromSlice());
++      const uint8_t* pi = (const uint8_t*) geoData.blendIndicesBuffer.mapPtr(geoData.blendIndicesBuffer.offsetFromSlice());
++      if (pp && pw && pi) {
++        for (uint32_t v = 0; v < std::min<uint32_t>(3u, geoData.vertexCount); ++v) {
++          const float* p = (const float*) (pp + v * geoData.positionBuffer.stride());
++          const uint8_t* w = pw + v * geoData.blendWeightBuffer.stride();
++          const uint8_t* ix = pi + v * geoData.blendIndicesBuffer.stride();
++          Vector4 acc(0.f);
++          const uint32_t wmap[4] = { 2, 1, 0, 3 };
++          for (uint32_t k = 0; k < 4; ++k) {
++            const float wk = w[wmap[k]] / 255.f;
++            if (ix[k] < maxBones && wk > 0.f) acc += (bones[ix[k]] * Vector4(p[0], p[1], p[2], 1.f)) * wk;
++          }
++          Logger::info(str::format("[gta4e skin] v", v, " pos(", p[0], " ", p[1], " ", p[2], ") w[", (uint32_t) w[0], " ", (uint32_t) w[1], " ", (uint32_t) w[2], " ", (uint32_t) w[3],
++            "] i[", (uint32_t) ix[0], " ", (uint32_t) ix[1], " ", (uint32_t) ix[2], " ", (uint32_t) ix[3], "] -> ", f4(acc)));
++        }
++      } else {
++        Logger::info("[gta4e skin] vertex data not CPU-mapped");
++      }
 +    }
 +    const Matrix4* const boneMatrices = maxBones ? m_stagedBones.stageBones(bones.data(), maxBones) : nullptr;
 +
@@ -203,10 +257,10 @@ index 88de3c9..0eee533 100644
      // If we don't have a mappable vertex buffer then we need to do this on the GPU
      bool mustUseGPU = drawCallState.getGeometryData().positionBuffer.mapPtr() == nullptr;
 diff --git a/src/dxvk/rtx_render/rtx_options.h b/src/dxvk/rtx_render/rtx_options.h
-index 3cc86cd..b0962f7 100644
+index 3cc86cd..8efa4cf 100644
 --- a/src/dxvk/rtx_render/rtx_options.h
 +++ b/src/dxvk/rtx_render/rtx_options.h
-@@ -1114,6 +1114,10 @@ namespace dxvk {
+@@ -1114,6 +1114,12 @@ namespace dxvk {
        RTX_OPTION("rtx.gta4e", uint32_t, volatileWindowFrames, 90, "Frames an instance stays 'volatile' after it last changed.");
        RTX_OPTION("rtx.gta4e", uint32_t, textureResidencyInterval, 4, "Re-plan texture residency every N frames (1 = every frame).");
        RTX_OPTION("rtx.gta4e", bool, dropSecondSubmission, false, "Drop a same-frame repeat submission of an identical object (same geometry + transform).");
@@ -214,6 +268,8 @@ index 3cc86cd..b0962f7 100644
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningBoneBase, 64, "First VS float constant register of the 3x4 bone matrices.");
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningWeightSwizzle, 0, "0 = weights read like the game shader (D3DCOLOR .xyzw vs D3DCOLORtoUBYTE4 indices), 1 = memory order.");
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningMaxBones, 64, "Max bones read from VS constants.");
++      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningDebugLog, 0, "Log this many skinned draws (matrices, first vertices, CPU-skinned result) to the Remix log each time the value changes.");
++      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningBoneMode, 0, "0 = World * bone, 1 = World only (bind pose test), 2 = bone only, 3 = World * transpose(bone).");
      } gta4e;
  
      struct OpacityMicromap {
