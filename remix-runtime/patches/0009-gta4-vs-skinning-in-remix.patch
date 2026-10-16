@@ -1,19 +1,20 @@
-From 12b2fed786a0f44c80d83082009b47d2683052e6 Mon Sep 17 00:00:00 2001
+From b88ff91c301c94503f8a35553d3428de5d907773 Mon Sep 17 00:00:00 2001
 From: gta4e <gta4e@local>
 Date: Fri, 16 Oct 2026 23:25:15 +0100
 Subject: [PATCH] p9
 
 ---
- src/d3d9/d3d9_rtx.cpp                         | 99 ++++++++++++++++++-
- src/d3d9/d3d9_rtx.h                           |  3 +
- src/dxvk/rtx_render/rtx_geometry_utils.cpp    |  5 +
- src/dxvk/rtx_render/rtx_options.h             |  4 +
- .../rtx/pass/gpu_skinning_binding_indices.h   |  5 +
- src/dxvk/shaders/rtx/pass/skinning.h          | 20 +++-
- 6 files changed, 129 insertions(+), 7 deletions(-)
+ src/d3d9/d3d9_rtx.cpp                         | 102 +++++++++++++++++-
+ src/d3d9/d3d9_rtx.h                           |   4 +
+ src/d3d9/d3d9_rtx_geometry.cpp                |   2 +-
+ src/dxvk/rtx_render/rtx_geometry_utils.cpp    |   5 +
+ src/dxvk/rtx_render/rtx_options.h             |   4 +
+ .../rtx/pass/gpu_skinning_binding_indices.h   |   5 +
+ src/dxvk/shaders/rtx/pass/skinning.h          |  20 +++-
+ 7 files changed, 134 insertions(+), 8 deletions(-)
 
 diff --git a/src/d3d9/d3d9_rtx.cpp b/src/d3d9/d3d9_rtx.cpp
-index 708433e..23329bf 100644
+index 708433e..e9c2a05 100644
 --- a/src/d3d9/d3d9_rtx.cpp
 +++ b/src/d3d9/d3d9_rtx.cpp
 @@ -7,6 +7,7 @@
@@ -24,12 +25,19 @@ index 708433e..23329bf 100644
  #include "../dxvk/gta4e_zone_profiler.h"
  #include "d3d9_device.h"
  
-@@ -721,13 +722,18 @@ namespace dxvk {
+@@ -717,17 +718,25 @@ namespace dxvk {
+ 
+     // Copy all the vertices into a staging buffer.  Assign fields of the geoData structure.
+     processVertices(vertexContext, vertexIndexOffset, geoData);
++    // gta4e: decide Remix-side VS skinning before hashing - those meshes must not hash the (per-frame) bone constants
++    const bool gta4eVsSkin = gta4eCanSkinVS(geoData);
++    m_gta4eHashWithoutVsConsts = gta4eVsSkin;
+     geoData.futureGeometryHashes = computeHash(geoData, maxOffsetedIndex);
++    m_gta4eHashWithoutVsConsts = false;
      geoData.futureBoundingBox = computeAxisAlignedBoundingBox(geoData);
      
      // Process skinning data
 -    m_activeDrawCallState.futureSkinningData = processSkinning(geoData);
-+    const bool gta4eVsSkin = gta4eCanSkinVS(geoData);
 +    m_activeDrawCallState.futureSkinningData = gta4eVsSkin ? gta4eProcessVSSkinning(geoData) : processSkinning(geoData);
  
      // Hash material data
@@ -45,7 +53,7 @@ index 708433e..23329bf 100644
      GTA4E_COUNT("draws.raytraced", 1);
      if (needVertexCapture) {
        GTA4E_COUNT("draws.vertex_capture", 1);
-@@ -735,10 +741,10 @@ namespace dxvk {
+@@ -735,10 +744,10 @@ namespace dxvk {
        prepareVertexCapture(vertexIndexOffset);
      }
  
@@ -58,7 +66,7 @@ index 708433e..23329bf 100644
        m_activeDrawCallState.programmableVertexShaderInfo = d3d9State().vertexShader->GetCommonShader()->GetInfo();
      }
      
-@@ -930,6 +936,91 @@ namespace dxvk {
+@@ -930,6 +939,91 @@ namespace dxvk {
      });
    }
  
@@ -151,19 +159,33 @@ index 708433e..23329bf 100644
    bool D3D9Rtx::processTextures() {
      // We don't support full legacy materials in fixed function mode yet..
 diff --git a/src/d3d9/d3d9_rtx.h b/src/d3d9/d3d9_rtx.h
-index 8e91346..b216314 100644
+index 8e91346..30d570a 100644
 --- a/src/d3d9/d3d9_rtx.h
 +++ b/src/d3d9/d3d9_rtx.h
-@@ -284,6 +284,9 @@ namespace dxvk {
+@@ -284,6 +284,10 @@ namespace dxvk {
      bool isRenderingUI();
  
      Future<SkinningData> processSkinning(const RasterGeometry& geoData);
 +    // gta4e: Remix-side skinning for vertex-shader meshes using the game's VS bone constants
 +    bool gta4eCanSkinVS(const RasterGeometry& geoData) const;
++    bool m_gta4eHashWithoutVsConsts = false;
 +    Future<SkinningData> gta4eProcessVSSkinning(const RasterGeometry& geoData);
  
      Future<AxisAlignedBoundingBox> computeAxisAlignedBoundingBox(const RasterGeometry& geoData);
  
+diff --git a/src/d3d9/d3d9_rtx_geometry.cpp b/src/d3d9/d3d9_rtx_geometry.cpp
+index 03563b2..e1a357a 100644
+--- a/src/d3d9/d3d9_rtx_geometry.cpp
++++ b/src/d3d9/d3d9_rtx_geometry.cpp
+@@ -157,7 +157,7 @@ namespace dxvk {
+ 
+     // Assume the GPU changed the data via shaders, include the constant buffer data in hash
+     XXH64_hash_t vertexShaderHash = kEmptyHash;
+-    if (m_parent->UseProgrammableVS() && useVertexCapture()) {
++    if (m_parent->UseProgrammableVS() && useVertexCapture() && !m_gta4eHashWithoutVsConsts) {
+       if (RtxOptions::geometryHashGenerationRule().test(HashComponents::GeometryDescriptor)) {
+         const D3D9ConstantSets& cb = m_parent->m_consts[DxsoProgramTypes::VertexShader];
+         auto& shaderByteCode = d3d9State().vertexShader->GetCommonShader()->GetBytecode();
 diff --git a/src/dxvk/rtx_render/rtx_geometry_utils.cpp b/src/dxvk/rtx_render/rtx_geometry_utils.cpp
 index 88de3c9..0eee533 100644
 --- a/src/dxvk/rtx_render/rtx_geometry_utils.cpp
