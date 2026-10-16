@@ -1,0 +1,23 @@
+diff --git a/src/dxvk/rtx_render/rtx_scene_manager.cpp b/src/dxvk/rtx_render/rtx_scene_manager.cpp
+index c6fd46c..193148e 100644
+--- a/src/dxvk/rtx_render/rtx_scene_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_scene_manager.cpp
+@@ -686,6 +686,18 @@ namespace dxvk {
+     const uint32_t currentFrameId = m_device->getCurrentFrameId();
+     const bool secondSubmissionThisFrame = (replacementInstance->frameLastSeen == currentFrameId);
+ 
++    // gta4e: GTA IV submits some objects twice per frame (same geometry and transform, slightly different
++    // per-draw data). Both used to land on this one ReplacementInstance, flip its material every draw and
++    // force the slow dynamic path for both. Same geometry + same transform is the same physical object, so
++    // keep the first submission and drop the repeat (skinned / particle draws excluded).
++    if (secondSubmissionThisFrame && RtxOptions::enablePreservePath() &&
++        input.getSkinningState().numBones == 0 &&
++        !input.getCategoryFlags().test(InstanceCategories::ParticleEmitter) &&
++        replacementInstance->prims.size() > 0) {
++      GTA4E_COUNT("draw.second_submission_dropped", 1);
++      return;
++    }
++
+     // Preserve path: L1 means this draw still matches the same ReplacementInstance by identity; replacer reload is
+     // expected to clear the draw-call tracker (see SceneManager::clear), so we do not re-verify mesh prims or
+     // activeReplacements pointers every frame. If a path exists where replacements bind without a clear, use dynamic
