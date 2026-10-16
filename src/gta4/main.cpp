@@ -348,6 +348,8 @@ HMODULE WINAPI LoadLibraryW_hk(LPCWSTR lpFileName)
 }
 #endif
 
+namespace gta4 { void start_autostart_watcher(); }
+
 BOOL APIENTRY DllMain(HMODULE hmodule, const DWORD ul_reason_for_call, LPVOID)
 {
 	if (ul_reason_for_call == DLL_PROCESS_ATTACH) 
@@ -371,6 +373,7 @@ BOOL APIENTRY DllMain(HMODULE hmodule, const DWORD ul_reason_for_call, LPVOID)
 		std::cout << "> Compiled On : " + std::string(__DATE__) + " " + std::string(__TIME__) + "\n";
 		std::cout << "> https://github.com/xoxor4d/gta4-rtx\n\n";
 		shared::common::set_console_color_default();
+		gta4::start_autostart_watcher();   // GTA IV Enhanced: no-click launch while <bridge>/autostart exists
 
 		if (const auto MH_INIT_STATUS = MH_Initialize(); MH_INIT_STATUS != MH_STATUS::MH_OK)
 		{

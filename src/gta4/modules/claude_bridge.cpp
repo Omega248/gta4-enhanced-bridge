@@ -56,6 +56,69 @@ namespace gta4
 		return g_prev_filter ? g_prev_filter(ep) : EXCEPTION_CONTINUE_SEARCH;
 	}
 
+	// ---- autostart: gets from the launcher screen into the game with no clicks -----------------
+	// Active only while <bridge>/autostart exists. Runs from DLL load (before the game window exists),
+	// posts Enter to this process's own launcher window until the game proper is running.
+	// Never touches other processes, dialogs (#32770) or the console.
+	static std::filesystem::path resolve_bridge_dir()
+	{
+		wchar_t env[MAX_PATH] = {};
+		if (GetEnvironmentVariableW(L"GTA4_BRIDGE_DIR", env, MAX_PATH) > 0) return env;
+		PWSTR dl = nullptr; std::filesystem::path out;
+		if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, 0, nullptr, &dl)) && dl)
+		{ out = std::filesystem::path(dl) / L"GTA4-Enhanced-Setup" / L"bridge"; CoTaskMemFree(dl); }
+		return out;
+	}
+
+	struct own_window { HWND hwnd; std::string cls; bool visible; };
+	static std::vector<own_window> list_own_windows()
+	{
+		std::vector<own_window> v;
+		EnumWindows([](HWND h, LPARAM lp) -> BOOL
+		{
+			DWORD pid = 0; GetWindowThreadProcessId(h, &pid);
+			if (pid == GetCurrentProcessId())
+			{
+				char cls[128] = {}; GetClassNameA(h, cls, sizeof(cls));
+				reinterpret_cast<std::vector<own_window>*>(lp)->push_back({ h, cls, IsWindowVisible(h) != FALSE });
+			}
+			return TRUE;
+		}, reinterpret_cast<LPARAM>(&v));
+		return v;
+	}
+
+	static void post_key(HWND h, UINT vk)
+	{
+		const UINT sc = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+		PostMessageA(h, WM_KEYDOWN, vk, 1 | (sc << 16));
+		Sleep(60);
+		PostMessageA(h, WM_KEYUP, vk, 1 | (sc << 16) | (1u << 30) | (1u << 31));
+	}
+
+	void start_autostart_watcher()
+	{
+		std::thread([]
+		{
+			const auto dir = resolve_bridge_dir();
+			std::error_code ec;
+			if (dir.empty() || !std::filesystem::exists(dir / "autostart", ec)) return;
+			std::ofstream(dir / "autostart_log.txt", std::ios::app) << "autostart watcher started\n";
+			const ULONGLONG t0 = GetTickCount64();
+			while (GetTickCount64() - t0 < 240000)
+			{
+				Sleep(2500);
+				if (g_tool_frame.load() > 120) { std::ofstream(dir / "autostart_log.txt", std::ios::app) << "in game, watcher done\n"; return; }
+				for (const auto& w : list_own_windows())
+				{
+					if (!w.visible || w.cls == "#32770" || w.cls == "ConsoleWindowClass") continue;
+					if (w.cls.find("grcWindow") != std::string::npos) continue;   // the game itself: SkipMenu loads the save
+					post_key(w.hwnd, VK_RETURN);
+					std::ofstream(dir / "autostart_log.txt", std::ios::app) << "Enter -> window class '" << w.cls << "'\n";
+				}
+			}
+		}).detach();
+	}
+
 	static std::string read_text(const std::filesystem::path& p)
 	{
 		std::ifstream in(p, std::ios::binary); if (!in) return {};
@@ -411,6 +474,44 @@ namespace gta4
 		}
 
 		// telemetry on=0/1 interval=<sec>
+		// what is the game doing right now (no screen reading needed)
+		if (cmd == "game_state")
+		{
+			std::string wl;
+			for (const auto& w : list_own_windows()) wl += std::string(wl.empty() ? "" : ",") + "[\"" + json_escape(w.cls) + "\"," + (w.visible ? "true" : "false") + "]";
+			natives::Vehicle car = 0; const bool in_car = n->IsCharInAnyCar(ped); if (in_car) n->GetCarCharIsUsing(ped, &car);
+			sprintf_s(buf, "\"playing\":%s,\"pause_menu\":%s,\"control\":%s,\"faded_out\":%s,\"cutscene_done\":%s,\"dead\":%s,\"in_car\":%s,\"mission\":%s,\"episode\":%d",
+				n->IsPlayerPlaying(player) ? "true" : "false", n->IsPauseMenuActive() ? "true" : "false", n->IsPlayerControlOn(player) ? "true" : "false",
+				n->IsScreenFadedOut() ? "true" : "false", n->HasCutsceneFinished() ? "true" : "false", n->IsCharDead(ped) ? "true" : "false",
+				in_car ? "true" : "false", n->GetMissionFlag() ? "true" : "false", static_cast<int>(n->GetCurrentEpisode()));
+			reply(c, true, std::string(buf) + ",\"windows\":[" + wl + "]"); return true;
+		}
+
+		// key vk=<virtual key code> [window=game|launcher] : posts a key to this game's own window (menus)
+		if (cmd == "key")
+		{
+			const UINT vk = static_cast<UINT>(i(c, "vk", VK_RETURN)); const bool launcher = s(c, "window", "game") == "launcher"; int sent = 0;
+			for (const auto& w : list_own_windows())
+			{
+				if (!w.visible || w.cls == "#32770" || w.cls == "ConsoleWindowClass") continue;
+				const bool is_game = w.cls.find("grcWindow") != std::string::npos;
+				if (is_game != launcher) { post_key(w.hwnd, vk); ++sent; }
+			}
+			reply(c, sent > 0, "\"sent\":" + std::to_string(sent)); return true;
+		}
+
+		// player control without input: drive_wander speed=<m/s>, walk_to x= y= z=, stop_tasks, control on=0/1
+		if (cmd == "drive_wander")
+		{
+			if (!n->IsCharInAnyCar(ped)) { reply(c, false, "\"error\":\"not in a car\""); return true; }
+			natives::Vehicle car = 0; n->GetCarCharIsUsing(ped, &car);
+			n->TaskCarDriveWander(ped, car, f(c, "speed", 15.0f), static_cast<uint32_t>(i(c, "style", 2)));
+			reply(c, true, ""); return true;
+		}
+		if (cmd == "walk_to") { n->TaskGoStraightToCoord(ped, f(c, "x"), f(c, "y"), f(c, "z"), static_cast<uint32_t>(i(c, "move", 2)), 45000); reply(c, true, ""); return true; }
+		if (cmd == "stop_tasks") { n->ClearCharTasks(ped); reply(c, true, ""); return true; }
+		if (cmd == "control") { n->SetPlayerControl(player, i(c, "on", 1) != 0); reply(c, true, ""); return true; }
+
 		if (cmd == "living_city") { living_city = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 		if (cmd == "telemetry") { g_telemetry_on = i(c, "on", 1) != 0; g_telemetry_interval = std::max(1, i(c, "interval", 5)); reply(c, true, ""); return true; }
 
