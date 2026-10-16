@@ -1,0 +1,267 @@
+From 12b2fed786a0f44c80d83082009b47d2683052e6 Mon Sep 17 00:00:00 2001
+From: gta4e <gta4e@local>
+Date: Fri, 16 Oct 2026 23:25:15 +0100
+Subject: [PATCH] p9
+
+---
+ src/d3d9/d3d9_rtx.cpp                         | 99 ++++++++++++++++++-
+ src/d3d9/d3d9_rtx.h                           |  3 +
+ src/dxvk/rtx_render/rtx_geometry_utils.cpp    |  5 +
+ src/dxvk/rtx_render/rtx_options.h             |  4 +
+ .../rtx/pass/gpu_skinning_binding_indices.h   |  5 +
+ src/dxvk/shaders/rtx/pass/skinning.h          | 20 +++-
+ 6 files changed, 129 insertions(+), 7 deletions(-)
+
+diff --git a/src/d3d9/d3d9_rtx.cpp b/src/d3d9/d3d9_rtx.cpp
+index 708433e..23329bf 100644
+--- a/src/d3d9/d3d9_rtx.cpp
++++ b/src/d3d9/d3d9_rtx.cpp
+@@ -7,6 +7,7 @@
+ #include "d3d9_buffer.h"
+ 
+ #include "d3d9_rtx.h"
++#include <array>
+ #include "../dxvk/gta4e_zone_profiler.h"
+ #include "d3d9_device.h"
+ 
+@@ -721,13 +722,18 @@ namespace dxvk {
+     geoData.futureBoundingBox = computeAxisAlignedBoundingBox(geoData);
+     
+     // Process skinning data
+-    m_activeDrawCallState.futureSkinningData = processSkinning(geoData);
++    const bool gta4eVsSkin = gta4eCanSkinVS(geoData);
++    m_activeDrawCallState.futureSkinningData = gta4eVsSkin ? gta4eProcessVSSkinning(geoData) : processSkinning(geoData);
+ 
+     // Hash material data
+     m_activeDrawCallState.materialData.updateCachedHash();
+ 
+     // For shader based drawcalls we also want to capture the vertex shader output
+-    const bool needVertexCapture = m_parent->UseProgrammableVS() && useVertexCapture();
++    const bool needVertexCapture = m_parent->UseProgrammableVS() && useVertexCapture() && !gta4eVsSkin;
++    if (gta4eVsSkin) {
++      GTA4E_COUNT("draws.vs_skinned", 1);
++      GTA4E_COUNT("draws.vs_skinned_verts", geoData.vertexCount);
++    }
+     GTA4E_COUNT("draws.raytraced", 1);
+     if (needVertexCapture) {
+       GTA4E_COUNT("draws.vertex_capture", 1);
+@@ -735,10 +741,10 @@ namespace dxvk {
+       prepareVertexCapture(vertexIndexOffset);
+     }
+ 
+-    m_activeDrawCallState.usesVertexShader = m_parent->UseProgrammableVS();
++    m_activeDrawCallState.usesVertexShader = m_parent->UseProgrammableVS() && !gta4eVsSkin;
+     m_activeDrawCallState.usesPixelShader = m_parent->UseProgrammablePS();
+ 
+-    if (m_activeDrawCallState.usesVertexShader) {
++    if (m_parent->UseProgrammableVS()) {
+       m_activeDrawCallState.programmableVertexShaderInfo = d3d9State().vertexShader->GetCommonShader()->GetInfo();
+     }
+     
+@@ -930,6 +936,91 @@ namespace dxvk {
+     });
+   }
+ 
++  bool D3D9Rtx::gta4eCanSkinVS(const RasterGeometry& geoData) const {
++    if (!RtxOptions::Gta4e::vsSkinning() || !m_parent->UseProgrammableVS()) {
++      return false;
++    }
++    if (!geoData.blendWeightBuffer.defined() || !geoData.blendIndicesBuffer.defined() || !geoData.normalBuffer.defined()) {
++      return false;
++    }
++    const VkFormat bw = geoData.blendWeightBuffer.vertexFormat();
++    const VkFormat pos = geoData.positionBuffer.vertexFormat();
++    const VkFormat nrm = geoData.normalBuffer.vertexFormat();
++    const VkFormat bi = geoData.blendIndicesBuffer.vertexFormat();
++    const bool bwOk = bw == VK_FORMAT_B8G8R8A8_UNORM || bw == VK_FORMAT_R8G8B8A8_UNORM;
++    const bool biOk = imageFormatInfo(bi)->elementSize == 4;
++    const bool posOk = pos == VK_FORMAT_R32G32B32_SFLOAT || pos == VK_FORMAT_R32G32B32A32_SFLOAT;
++    const bool nrmOk = nrm == VK_FORMAT_R32G32B32_SFLOAT || nrm == VK_FORMAT_R32G32B32A32_SFLOAT;
++    return bwOk && biOk && posOk && nrmOk && (geoData.blendWeightBuffer.offsetFromSlice() % 4) == 0;
++  }
++
++  Future<SkinningData> D3D9Rtx::gta4eProcessVSSkinning(const RasterGeometry& geoData) {
++    ScopedCpuProfileZone();
++    // GTA IV (RAGE) skinning VS: float3x4 bone matrices at c[base + 3*i .. +2], p'_k = dot(row_k, float4(p, 1)),
++    // then the world matrix (D3DTS_WORLD, set by the compatibility mod). Remix's skinning path expects
++    // world-space bones (like D3D9 fixed-function WORLDMATRIX(n)), so bone_i = World * B_i.
++    const uint32_t base = RtxOptions::Gta4e::vsSkinningBoneBase();
++    const auto& consts = d3d9State().vsConsts.fConsts;
++    const uint32_t regCount = static_cast<uint32_t>(std::size(consts));
++    uint32_t maxBones = std::min<uint32_t>(RtxOptions::Gta4e::vsSkinningMaxBones(), 256u);
++    if (base >= regCount) {
++      maxBones = 0;
++    } else {
++      maxBones = std::min<uint32_t>(maxBones, (regCount - base) / 3);
++    }
++
++    const Matrix4 world = d3d9State().transforms[GetTransformIndex(D3DTS_WORLD)];
++    std::array<Matrix4, 256> bones;
++    for (uint32_t b = 0; b < maxBones; ++b) {
++      const Vector4& r0 = consts[base + b * 3 + 0];
++      const Vector4& r1 = consts[base + b * 3 + 1];
++      const Vector4& r2 = consts[base + b * 3 + 2];
++      Matrix4 m;
++      m[0] = Vector4(r0.x, r1.x, r2.x, 0.f);
++      m[1] = Vector4(r0.y, r1.y, r2.y, 0.f);
++      m[2] = Vector4(r0.z, r1.z, r2.z, 0.f);
++      m[3] = Vector4(r0.w, r1.w, r2.w, 1.f);
++      bones[b] = world * m;
++    }
++    const Matrix4* const boneMatrices = maxBones ? m_stagedBones.stageBones(bones.data(), maxBones) : nullptr;
++
++    HashQuery blendIndices;
++    {
++      auto& buffer = geoData.blendIndicesBuffer;
++      blendIndices.pBase = (uint8_t*) buffer.mapPtr(buffer.offsetFromSlice());
++      blendIndices.elementSize = imageFormatInfo(buffer.vertexFormat())->elementSize;
++      blendIndices.stride = buffer.stride();
++      blendIndices.size = blendIndices.stride * geoData.vertexCount;
++      blendIndices.ref = buffer.buffer().ptr();
++      blendIndices.ref->acquire(DxvkAccess::Read);
++      blendIndices.ref->incRef();
++    }
++    const uint32_t numBonesPerVertex = 4;
++    const uint32_t vertexCount = geoData.vertexCount;
++
++    return m_pGeometryWorkers->Schedule([boneMatrices, blendIndices, numBonesPerVertex, vertexCount, maxBones]()->SkinningData {
++      ScopedCpuProfileZone();
++      int minBoneIndex = 0, maxBoneIndex = -1;
++      if (!getMinMaxBoneIndices(blendIndices.pBase, blendIndices.stride, vertexCount, numBonesPerVertex, minBoneIndex, maxBoneIndex)) {
++        minBoneIndex = 0; maxBoneIndex = 0;
++      }
++      blendIndices.ref->release(DxvkAccess::Read);
++      blendIndices.ref->decRef();
++
++      SkinningData skinningData;
++      const uint32_t numBones = std::min<uint32_t>(static_cast<uint32_t>(maxBoneIndex + 1), maxBones);
++      if (numBones == 0 || boneMatrices == nullptr) {
++        return skinningData;
++      }
++      skinningData.pBoneMatrices.assign(boneMatrices, boneMatrices + numBones);
++      skinningData.minBoneIndex = std::min<uint32_t>(static_cast<uint32_t>(minBoneIndex), numBones - 1);
++      skinningData.numBones = numBones;
++      skinningData.numBonesPerVertex = numBonesPerVertex;
++      skinningData.computeHash();
++      return skinningData;
++    });
++  }
++
+   template<bool FixedFunction>
+   bool D3D9Rtx::processTextures() {
+     // We don't support full legacy materials in fixed function mode yet..
+diff --git a/src/d3d9/d3d9_rtx.h b/src/d3d9/d3d9_rtx.h
+index 8e91346..b216314 100644
+--- a/src/d3d9/d3d9_rtx.h
++++ b/src/d3d9/d3d9_rtx.h
+@@ -284,6 +284,9 @@ namespace dxvk {
+     bool isRenderingUI();
+ 
+     Future<SkinningData> processSkinning(const RasterGeometry& geoData);
++    // gta4e: Remix-side skinning for vertex-shader meshes using the game's VS bone constants
++    bool gta4eCanSkinVS(const RasterGeometry& geoData) const;
++    Future<SkinningData> gta4eProcessVSSkinning(const RasterGeometry& geoData);
+ 
+     Future<AxisAlignedBoundingBox> computeAxisAlignedBoundingBox(const RasterGeometry& geoData);
+ 
+diff --git a/src/dxvk/rtx_render/rtx_geometry_utils.cpp b/src/dxvk/rtx_render/rtx_geometry_utils.cpp
+index 88de3c9..0eee533 100644
+--- a/src/dxvk/rtx_render/rtx_geometry_utils.cpp
++++ b/src/dxvk/rtx_render/rtx_geometry_utils.cpp
+@@ -306,6 +306,11 @@ namespace dxvk {
+     params.useIndices = drawCallState.getGeometryData().blendIndicesBuffer.defined() ? 1 : 0;
+     params.numBones = drawCallState.getGeometryData().numBonesPerVertex;
+     params.useOctahedralNormals = normalVertexFormat == VK_FORMAT_R32_UINT ? 1 : 0;
++    {
++      const VkFormat bwFormat = drawCallState.getGeometryData().blendWeightBuffer.vertexFormat();
++      params.weightsUnorm8 = (bwFormat == VK_FORMAT_B8G8R8A8_UNORM || bwFormat == VK_FORMAT_R8G8B8A8_UNORM) ? 1 : 0;
++      params.weightSwizzle = RtxOptions::Gta4e::vsSkinningWeightSwizzle();
++    }
+ 
+     // If we don't have a mappable vertex buffer then we need to do this on the GPU
+     bool mustUseGPU = drawCallState.getGeometryData().positionBuffer.mapPtr() == nullptr;
+diff --git a/src/dxvk/rtx_render/rtx_options.h b/src/dxvk/rtx_render/rtx_options.h
+index 3cc86cd..b0962f7 100644
+--- a/src/dxvk/rtx_render/rtx_options.h
++++ b/src/dxvk/rtx_render/rtx_options.h
+@@ -1114,6 +1114,10 @@ namespace dxvk {
+       RTX_OPTION("rtx.gta4e", uint32_t, volatileWindowFrames, 90, "Frames an instance stays 'volatile' after it last changed.");
+       RTX_OPTION("rtx.gta4e", uint32_t, textureResidencyInterval, 4, "Re-plan texture residency every N frames (1 = every frame).");
+       RTX_OPTION("rtx.gta4e", bool, dropSecondSubmission, false, "Drop a same-frame repeat submission of an identical object (same geometry + transform).");
++      RTX_OPTION("rtx.gta4e", bool, vsSkinning, false, "GTA IV: skin vertex-shader meshes (peds, vehicle parts) in Remix from the VS bone constants instead of vertex capture.");
++      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningBoneBase, 64, "First VS float constant register of the 3x4 bone matrices.");
++      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningWeightSwizzle, 0, "0 = weights read like the game shader (D3DCOLOR .xyzw vs D3DCOLORtoUBYTE4 indices), 1 = memory order.");
++      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningMaxBones, 64, "Max bones read from VS constants.");
+     } gta4e;
+ 
+     struct OpacityMicromap {
+diff --git a/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h b/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h
+index ec4e860..b90d37b 100644
+--- a/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h
++++ b/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h
+@@ -56,4 +56,9 @@ struct SkinningArgs {
+   uint useIndices;
+   uint numBones;
+   uint useOctahedralNormals;
++
++  uint weightsUnorm8;   // gta4e: blend weights are 4 x UNORM8 (D3DCOLOR) instead of floats
++  uint weightSwizzle;   // gta4e: 0 = D3DCOLOR channel order (b2,b1,b0,b3), 1 = memory order
++  uint pad0;
++  uint pad1;
+ };
+\ No newline at end of file
+diff --git a/src/dxvk/shaders/rtx/pass/skinning.h b/src/dxvk/shaders/rtx/pass/skinning.h
+index 3b89352..372a24f 100644
+--- a/src/dxvk/shaders/rtx/pass/skinning.h
++++ b/src/dxvk/shaders/rtx/pass/skinning.h
+@@ -56,6 +56,20 @@ uint4 get(ReadByteBuffer buf, uint index) {
+ }
+ #endif
+ 
++// gta4e: weight i of vertex, from float weights or packed UNORM8 weights
++float readBlendWeight(ReadBuffer(float) srcBlendWeight, uint baseWeightsOffset, uint i, ConstBuffer(SkinningArgs) cb) {
++  if (cb.weightsUnorm8 == 0) {
++    return srcBlendWeight[baseWeightsOffset + i];
++  }
++  const uint packed = asuint(srcBlendWeight[baseWeightsOffset]);
++  uint byteIndex = i;
++  if (cb.weightSwizzle == 0) {
++    // shader sees D3DCOLOR as (r,g,b,a) = bytes (2,1,0,3); indices via D3DCOLORtoUBYTE4 come out in memory order
++    byteIndex = (i == 0) ? 2u : (i == 1) ? 1u : (i == 2) ? 0u : 3u;
++  }
++  return float((packed >> (byteIndex * 8u)) & 0xffu) * (1.0f / 255.0f);
++}
++
+ void skinning(const uint32_t idx,
+               WriteBuffer(float) dstPosition,
+               WriteBuffer(float) dstNormal,
+@@ -69,7 +83,7 @@ void skinning(const uint32_t idx,
+   // Weights are normalized to 1, the last weight is equal to the remainder
+   float lastWeight = 1.f;
+   for (uint i = 0; i < cb.numBones - 1; i++) {
+-    lastWeight -= srcBlendWeight[baseWeightsOffset + i];
++    lastWeight -= readBlendWeight(srcBlendWeight, baseWeightsOffset, i, cb);
+   }
+ 
+   // Read position
+@@ -100,7 +114,7 @@ void skinning(const uint32_t idx,
+     for (uint j = 0; j < cb.numBones; j+=4) {
+       uint4 blendIndices = get(srcBlendIndices, baseIndicesOffset + j);
+       for (uint i = 0; i < 4 && i + j < cb.numBones; ++i) {
+-        float blendWeight = i + j == cb.numBones - 1 ? lastWeight : srcBlendWeight[baseWeightsOffset + i + j];
++        float blendWeight = i + j == cb.numBones - 1 ? lastWeight : readBlendWeight(srcBlendWeight, baseWeightsOffset, i + j, cb);
+         if (blendWeight > 0) {
+           Matrix4 bone = toMatrix4(cb.bones[blendIndices[i]]);
+           positionOut += mul(bone, position) * blendWeight;
+@@ -110,7 +124,7 @@ void skinning(const uint32_t idx,
+     }
+   } else {
+     for (uint i = 0; i < cb.numBones - 1; ++i) {
+-      float blendWeight = srcBlendWeight[baseWeightsOffset + i];
++      float blendWeight = readBlendWeight(srcBlendWeight, baseWeightsOffset, i, cb);
+       if (blendWeight > 0.f) {
+         Matrix4 bone = toMatrix4(cb.bones[i]);
+         positionOut += mul(bone, position) * blendWeight;
+-- 
+2.43.0
+
