@@ -12,6 +12,21 @@
 
 namespace gta4
 {
+	// true when the bound vertex declaration carries skinning data (BLENDINDICES / BLENDWEIGHT)
+	static bool decl_has_blend(IDirect3DDevice9* dev)
+	{
+		static IDirect3DVertexDeclaration9* s_last = nullptr; static bool s_last_res = false;
+		IDirect3DVertexDeclaration9* d = nullptr;
+		if (FAILED(dev->GetVertexDeclaration(&d)) || !d) return false;
+		if (d == s_last) { d->Release(); return s_last_res; }
+		D3DVERTEXELEMENT9 el[MAXD3DDECLLENGTH + 1]; UINT n = 0; bool res = false;
+		if (SUCCEEDED(d->GetDeclaration(el, &n)))
+			for (UINT i = 0; i < n && el[i].Stream != 0xFF; ++i)
+				if (el[i].Usage == D3DDECLUSAGE_BLENDINDICES || el[i].Usage == D3DDECLUSAGE_BLENDWEIGHT) { res = true; break; }
+		s_last = d; s_last_res = res; d->Release();
+		return res;
+	}
+
 	int g_is_instance_rendering = 0;
 	int g_is_sky_rendering = 0;
 	int g_is_water_rendering = 0;
@@ -1836,6 +1851,23 @@ namespace gta4
 			// shared::utils::lookat_vertex_decl(dev);
 
 			render_with_ff = g_is_rendering_static;
+
+			// GTA IV Enhanced: optionally send unskinned vehicle / prop-instance / other draws through the
+			// fixed-function path so Remix can reuse their BLAS instead of vertex-capturing them every frame.
+			if (!render_with_ff && !g_is_sky_rendering && !g_is_water_rendering && !g_is_rendering_mirror && !g_is_rendering_phone)
+			{
+				if (const auto ffm = vs_stats::g_ff_mask.load(std::memory_order_relaxed); ffm)
+				{
+					using namespace vs_stats;
+					const int cat = (g_is_rendering_fx || g_is_rendering_fx_instance) ? C_FX : g_is_rendering_vehicle ? C_VEHICLE
+						: g_is_instance_rendering ? C_INSTANCE : C_OTHER;
+					if ((ffm & (1u << cat)) && !decl_has_blend(dev))
+					{
+						render_with_ff = true;
+						g_ff_forced.fetch_add(1, std::memory_order_relaxed);
+					}
+				}
+			}
 			//bool allow_vertex_colors = false;
 
 #ifdef LOG_SHADERPRESETS

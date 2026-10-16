@@ -640,6 +640,9 @@ namespace gta4
 			if (!flag) { reply(c, false, "\"error\":\"unknown category\""); return true; }
 			*flag = on; reply(c, true, ""); return true;
 		}
+		// ff_cat mask=<bits> : force fixed-function for unskinned draws of these categories (1=vehicle 2=instance 7=other 3=fx)
+		//   bit values: vehicle=2 instance=4 fx=8 other=128 ; e.g. ff_cat mask=2 (vehicles only)
+		if (cmd == "ff_cat") { vs_stats::g_ff_mask = static_cast<std::uint32_t>(i(c, "mask", 0)); char b2[64]; sprintf_s(b2, "\"forced_since_last\":%u", vs_stats::g_ff_forced.exchange(0)); reply(c, true, b2); return true; }
 		if (cmd == "vs_skip") { vs_stats::g_skip_mask = static_cast<std::uint32_t>(i(c, "mask", 0)); reply(c, true, ""); return true; }
 		if (cmd == "pad") { dedupe_device::g_pad_rs = i(c, "rs", 0); dedupe_device::g_pad_vsc = i(c, "vsc", 0); reply(c, true, ""); return true; }
 		if (cmd == "bridge_time") { dedupe_device::g_bt_on = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
