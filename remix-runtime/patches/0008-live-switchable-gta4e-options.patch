@@ -1,0 +1,72 @@
+diff --git a/src/dxvk/rtx_render/rtx_accel_manager.cpp b/src/dxvk/rtx_render/rtx_accel_manager.cpp
+index 76ce176..161adee 100644
+--- a/src/dxvk/rtx_render/rtx_accel_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_accel_manager.cpp
+@@ -98,6 +98,10 @@ namespace dxvk {
+     // bucket that contained this instance gets rebuilt. Forcing the generation check makes sure
+     // the full-skip fast path cannot run with a stale bucket.
+     GTA4E_COUNT("buckets.instance_evictions", 1);
++    if (!RtxOptions::Gta4e::keepBucketCacheOnRemoval()) {
++      m_cachedBuckets.clear();
++      m_instanceBucketIndex.clear();
++    }
+     m_lastProcessedGeneration = UINT64_MAX;
+   }
+ 
+@@ -808,8 +812,8 @@ namespace dxvk {
+           } else if (dirtyNow) {
+             it->second = currentFrame;
+           }
+-          constexpr uint32_t kVolatileWindowFrames = 90;
+-          bucketKey.volatileTier = (currentFrame - it->second < kVolatileWindowFrames) ? 1 : 0;
++          const uint32_t kVolatileWindowFrames = RtxOptions::Gta4e::volatileWindowFrames();
++          bucketKey.volatileTier = (RtxOptions::Gta4e::volatileBuckets() && currentFrame - it->second < kVolatileWindowFrames) ? 1 : 0;
+           if (bucketKey.volatileTier) GTA4E_COUNT("buckets.assign_volatile", 1);
+           else GTA4E_COUNT("buckets.assign_stable", 1);
+         }
+diff --git a/src/dxvk/rtx_render/rtx_options.h b/src/dxvk/rtx_render/rtx_options.h
+index cec256b..3cc86cd 100644
+--- a/src/dxvk/rtx_render/rtx_options.h
++++ b/src/dxvk/rtx_render/rtx_options.h
+@@ -1107,6 +1107,15 @@ namespace dxvk {
+       RTX_OPTION("rtx.aliasing", VkImageViewType, imageViewType, VkImageViewType::VK_IMAGE_VIEW_TYPE_2D, "The image view type of the aliasing resource (e.g., 1D, 2D, 3D, or cube).");
+     } aliasing;
+ 
++    // GTA IV Enhanced runtime experiments: all switchable live (remix_raw rtx.gta4e.<name>=...) for A/B tests
++    struct Gta4e {
++      RTX_OPTION("rtx.gta4e", bool, keepBucketCacheOnRemoval, true, "Keep the merged-BLAS bucket cache when an instance is removed (only its bucket rebuilds).");
++      RTX_OPTION("rtx.gta4e", bool, volatileBuckets, true, "Put recently-changing instances into separate merged-BLAS buckets.");
++      RTX_OPTION("rtx.gta4e", uint32_t, volatileWindowFrames, 90, "Frames an instance stays 'volatile' after it last changed.");
++      RTX_OPTION("rtx.gta4e", uint32_t, textureResidencyInterval, 4, "Re-plan texture residency every N frames (1 = every frame).");
++      RTX_OPTION("rtx.gta4e", bool, dropSecondSubmission, false, "Drop a same-frame repeat submission of an identical object (same geometry + transform).");
++    } gta4e;
++
+     struct OpacityMicromap {
+       friend class RtxOptions;
+       friend class ImGUI;
+diff --git a/src/dxvk/rtx_render/rtx_scene_manager.cpp b/src/dxvk/rtx_render/rtx_scene_manager.cpp
+index 193148e..c1bd67c 100644
+--- a/src/dxvk/rtx_render/rtx_scene_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_scene_manager.cpp
+@@ -690,7 +690,7 @@ namespace dxvk {
+     // per-draw data). Both used to land on this one ReplacementInstance, flip its material every draw and
+     // force the slow dynamic path for both. Same geometry + same transform is the same physical object, so
+     // keep the first submission and drop the repeat (skinned / particle draws excluded).
+-    if (secondSubmissionThisFrame && RtxOptions::enablePreservePath() &&
++    if (secondSubmissionThisFrame && RtxOptions::Gta4e::dropSecondSubmission() && RtxOptions::enablePreservePath() &&
+         input.getSkinningState().numBones == 0 &&
+         !input.getCategoryFlags().test(InstanceCategories::ParticleEmitter) &&
+         replacementInstance->prims.size() > 0) {
+diff --git a/src/dxvk/rtx_render/rtx_texture_manager.cpp b/src/dxvk/rtx_render/rtx_texture_manager.cpp
+index 0c8dc83..fa89455 100644
+--- a/src/dxvk/rtx_render/rtx_texture_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_texture_manager.cpp
+@@ -1315,7 +1315,7 @@ namespace dxvk {
+     // gta4e: the residency pass below walks, sorts and reschedules every managed texture (~4 ms a
+     // frame in GTA IV). Feedback is still accumulated every frame above; re-plan residency every
+     // 4th frame only.
+-    if ((curframe & 3u) != 0u) {
++    if (const uint32_t interval = std::max(1u, RtxOptions::Gta4e::textureResidencyInterval()); interval > 1 && (curframe % interval) != 0u) {
+       return;
+     }
+ 

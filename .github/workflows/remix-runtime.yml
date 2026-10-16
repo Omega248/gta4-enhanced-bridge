@@ -28,6 +28,22 @@ jobs:
         git clone --depth 1 --recurse-submodules --shallow-submodules -b $branch https://github.com/xoxor4d/dxvk-remix.git remix
         git -C remix log -1 --format="%H %s"
 
+    - name: Age sources (lets the cached build skip everything our patches do not touch)
+      shell: pwsh
+      run: |
+        $old = Get-Date '2020-01-01'
+        Get-ChildItem remix -Recurse -File -Force | Where-Object { $_.FullName -notmatch '\\.git\\' } | ForEach-Object { $_.LastWriteTime = $old }
+
+    - name: Restore build cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          remix/_Comp64Release
+          C:/packman-repo
+        key: remix-rt-${{ github.event.inputs.branch || 'game/gta4_atmos10_nr2' }}-${{ github.run_id }}
+        restore-keys: |
+          remix-rt-${{ github.event.inputs.branch || 'game/gta4_atmos10_nr2' }}-
+
     - name: Apply gta4e patches
       shell: pwsh
       run: |
@@ -44,10 +60,21 @@ jobs:
     - name: Build release
       shell: pwsh
       working-directory: remix
+      env:
+        PM_PACKAGES_ROOT: C:/packman-repo
       run: |
         Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
         . .\build_common.ps1
-        PerformBuild -BuildFlavour release -BuildSubDir _Comp64Release -Backend ninja -EnableTracy false copy_output
+        if (Test-Path _Comp64Release\build.ninja) {
+          Write-Host "Incremental build from cache"
+          Push-Location _Comp64Release
+          & meson compile -v
+          & meson install
+          Pop-Location
+          if ($LASTEXITCODE -ne 0) { throw "incremental build failed" }
+        } else {
+          PerformBuild -BuildFlavour release -BuildSubDir _Comp64Release -Backend ninja -EnableTracy false copy_output
+        }
         Get-ChildItem _output | Format-Table Name, Length
 
     - name: Upload runtime
