@@ -375,6 +375,16 @@ namespace gta4
 	}
 
 
+	// SEH-guarded read of the viewport planes: during teleports / scripted-camera teardown the game can
+	// hand us a viewport that is being rebuilt (crash 0xC0000005 seen in overnight testing). Treat as culled.
+	static int frustum_planes_original(game::grcViewport* vp, float orgX, float orgY, float orgZ, float distanceToObject, float* outAdjustedNearDistance);
+	static int frustum_planes_guarded(game::grcViewport* vp, float orgX, float orgY, float orgZ, float distanceToObject, float* outAdjustedNearDistance)
+	{
+		if (!vp) return 0;
+		__try { return frustum_planes_original(vp, orgX, orgY, orgZ, distanceToObject, outAdjustedNearDistance); }
+		__except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+	}
+
 	// A general culling function used by lights, npc's and other? things ..
 	int __fastcall frustum_planes_check_hk(game::grcViewport* vp, [[maybe_unused]] void* fastcall_arg, float orgX, float orgY, float orgZ, float distanceToObject, float* outAdjustedNearDistance)
 	{
@@ -409,6 +419,11 @@ namespace gta4
 			}
 		}
 
+		return frustum_planes_guarded(vp, orgX, orgY, orgZ, distanceToObject, outAdjustedNearDistance);
+	}
+
+	static int frustum_planes_original(game::grcViewport* vp, float orgX, float orgY, float orgZ, float distanceToObject, float* outAdjustedNearDistance)
+	{
 		// original code
 		if (outAdjustedNearDistance)
 		{

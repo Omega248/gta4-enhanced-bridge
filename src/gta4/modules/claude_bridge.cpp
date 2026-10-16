@@ -1066,9 +1066,10 @@ namespace gta4
 				{
 					command sc; SYSTEMTIME t; GetLocalTime(&t); char id[64];
 					sprintf_s(id, "autorun_%04u%02u%02u_%02u%02u%02u", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
-					sc.id = id; sc.args["cmd"] = "script"; sc.args["file"] = "autorun"; sc.args["report"] = id;
+					sc.id = id; sc.args["cmd"] = "script"; sc.args["file"] = "autorun.last"; sc.args["report"] = id;
 					b->m_queue.push_front(std::move(sc));
-					// keep the script but mark it as consumed so it only runs on the launch it was meant for
+					// consume it (runs from autorun.last.txt) so it only runs on the launch it was meant for
+					std::filesystem::remove(b->m_dir / "scripts" / "autorun.last.txt", ec);
 					std::filesystem::rename(ar, b->m_dir / "scripts" / "autorun.last.txt", ec);
 				}
 			}
