@@ -1,22 +1,22 @@
-From 9cd3aec05757baac911217f06cc55884677ad42d Mon Sep 17 00:00:00 2001
+From 880034c053952e594c0885a4ce89ec7f3e5a9bc4 Mon Sep 17 00:00:00 2001
 From: gta4e <gta4e@local>
 Date: Fri, 16 Oct 2026 23:25:15 +0100
 Subject: [PATCH] p9
 
 ---
- src/d3d9/d3d9_rtx.cpp                         | 158 +++++++++++++++++-
+ src/d3d9/d3d9_rtx.cpp                         | 164 +++++++++++++++++-
  src/d3d9/d3d9_rtx.h                           |   4 +
  src/d3d9/d3d9_rtx_geometry.cpp                |   2 +-
  src/dxvk/rtx_render/rtx_geometry_utils.cpp    |   5 +
- src/dxvk/rtx_render/rtx_options.h             |   6 +
+ src/dxvk/rtx_render/rtx_options.h             |   7 +
  src/dxvk/rtx_render/rtx_types.cpp             |   4 +-
  src/dxvk/rtx_render/rtx_types.h               |   1 +
  .../rtx/pass/gpu_skinning_binding_indices.h   |   5 +
  src/dxvk/shaders/rtx/pass/skinning.h          |  20 ++-
- 9 files changed, 196 insertions(+), 9 deletions(-)
+ 9 files changed, 203 insertions(+), 9 deletions(-)
 
 diff --git a/src/d3d9/d3d9_rtx.cpp b/src/d3d9/d3d9_rtx.cpp
-index 708433e..fce1d5f 100644
+index 708433e..1126e56 100644
 --- a/src/d3d9/d3d9_rtx.cpp
 +++ b/src/d3d9/d3d9_rtx.cpp
 @@ -7,6 +7,7 @@
@@ -27,12 +27,17 @@ index 708433e..fce1d5f 100644
  #include "../dxvk/gta4e_zone_profiler.h"
  #include "d3d9_device.h"
  
-@@ -717,17 +718,25 @@ namespace dxvk {
+@@ -717,17 +718,30 @@ namespace dxvk {
  
      // Copy all the vertices into a staging buffer.  Assign fields of the geoData structure.
      processVertices(vertexContext, vertexIndexOffset, geoData);
 +    // gta4e: decide Remix-side VS skinning before hashing - those meshes must not hash the (per-frame) bone constants
 +    const bool gta4eVsSkin = gta4eCanSkinVS(geoData);
++    if (gta4eVsSkin && !RtxOptions::Gta4e::vsSkinningKeepVertexColor()) {
++      // the game's raw vertex colour is shader data (AO / wetness / alpha 0), not a colour - with vertex capture
++      // Remix saw the VS output instead; without it, drop the stream so the material is not darkened or made invisible
++      geoData.color0Buffer = RasterBuffer();
++    }
 +    m_gta4eHashWithoutVsConsts = gta4eVsSkin;
      geoData.futureGeometryHashes = computeHash(geoData, maxOffsetedIndex);
 +    m_gta4eHashWithoutVsConsts = false;
@@ -55,7 +60,7 @@ index 708433e..fce1d5f 100644
      GTA4E_COUNT("draws.raytraced", 1);
      if (needVertexCapture) {
        GTA4E_COUNT("draws.vertex_capture", 1);
-@@ -735,10 +744,10 @@ namespace dxvk {
+@@ -735,10 +749,10 @@ namespace dxvk {
        prepareVertexCapture(vertexIndexOffset);
      }
  
@@ -68,7 +73,7 @@ index 708433e..fce1d5f 100644
        m_activeDrawCallState.programmableVertexShaderInfo = d3d9State().vertexShader->GetCommonShader()->GetInfo();
      }
      
-@@ -930,6 +939,147 @@ namespace dxvk {
+@@ -930,6 +944,148 @@ namespace dxvk {
      });
    }
  
@@ -145,7 +150,8 @@ index 708433e..fce1d5f 100644
 +        " posFmt=", (uint32_t) geoData.positionBuffer.vertexFormat(), " posStride=", geoData.positionBuffer.stride(),
 +        " bwFmt=", (uint32_t) geoData.blendWeightBuffer.vertexFormat(), " bwOff=", geoData.blendWeightBuffer.offsetFromSlice(), " bwStride=", geoData.blendWeightBuffer.stride(),
 +        " biFmt=", (uint32_t) geoData.blendIndicesBuffer.vertexFormat(), " biOff=", geoData.blendIndicesBuffer.offsetFromSlice(),
-+        " nFmt=", (uint32_t) geoData.normalBuffer.vertexFormat()));
++        " nFmt=", (uint32_t) geoData.normalBuffer.vertexFormat(), " col0=", geoData.color0Buffer.defined() ? 1 : 0, " tc=", geoData.texcoordBuffer.defined() ? 1 : 0,
++        " idx=", geoData.indexCount));
 +      Logger::info(str::format("[gta4e skin] world c0..3 ", f4(world[0]), f4(world[1]), f4(world[2]), f4(world[3])));
 +      if (maxBones > 0) {
 +        Logger::info(str::format("[gta4e skin] c", base, " ", f4(consts[base]), f4(consts[base + 1]), f4(consts[base + 2])));
@@ -261,10 +267,10 @@ index 88de3c9..0eee533 100644
      // If we don't have a mappable vertex buffer then we need to do this on the GPU
      bool mustUseGPU = drawCallState.getGeometryData().positionBuffer.mapPtr() == nullptr;
 diff --git a/src/dxvk/rtx_render/rtx_options.h b/src/dxvk/rtx_render/rtx_options.h
-index 3cc86cd..ea74f3b 100644
+index 3cc86cd..d3c452e 100644
 --- a/src/dxvk/rtx_render/rtx_options.h
 +++ b/src/dxvk/rtx_render/rtx_options.h
-@@ -1114,6 +1114,12 @@ namespace dxvk {
+@@ -1114,6 +1114,13 @@ namespace dxvk {
        RTX_OPTION("rtx.gta4e", uint32_t, volatileWindowFrames, 90, "Frames an instance stays 'volatile' after it last changed.");
        RTX_OPTION("rtx.gta4e", uint32_t, textureResidencyInterval, 4, "Re-plan texture residency every N frames (1 = every frame).");
        RTX_OPTION("rtx.gta4e", bool, dropSecondSubmission, false, "Drop a same-frame repeat submission of an identical object (same geometry + transform).");
@@ -272,6 +278,7 @@ index 3cc86cd..ea74f3b 100644
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningBoneBase, 64, "First VS float constant register of the 3x4 bone matrices.");
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningWeightSwizzle, 0, "0 = weights read like the game shader (D3DCOLOR .xyzw vs D3DCOLORtoUBYTE4 indices), 1 = memory order.");
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningMaxBones, 64, "Max bones read from VS constants.");
++      RTX_OPTION("rtx.gta4e", bool, vsSkinningKeepVertexColor, false, "Keep the raw vertex colour stream on Remix-skinned VS meshes.");
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningDebugLog, 0, "Log this many skinned draws (matrices, first vertices, CPU-skinned result) to the Remix log each time the value changes.");
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningBoneMode, 0, "0 = object-space bones (objectToWorld = World), 1 = world-space bones (D3D9 FF style), 2 = bind pose test, 3 = world * transposed bone.");
      } gta4e;
