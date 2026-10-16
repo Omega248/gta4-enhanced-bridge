@@ -67,6 +67,10 @@ jobs:
         . .\build_common.ps1
         if (Test-Path _Comp64Release\build.ninja) {
           Write-Host "Incremental build from cache"
+          SetupBuild -BuildArch x64
+          # re-run setup so the packman/external links (not part of the cache) are recreated
+          & meson setup --reconfigure --buildtype release --backend ninja -Denable_tracy=false _Comp64Release
+          if ($LASTEXITCODE -ne 0) { throw "meson reconfigure failed" }
           Push-Location _Comp64Release
           & meson compile -v
           & meson install
