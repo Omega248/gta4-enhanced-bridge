@@ -27,6 +27,11 @@ namespace gta4
 		// called every frame from the game's process hook (game thread, natives are safe here)
 		static void on_frame();
 
+		// queue bridge commands from inside the game (e.g. the in-game Enhanced panel): one command per
+		// line, "cmd k=v k=v". Written to the inbox, so it runs on the game thread like any other command.
+		static bool post_commands(const std::string& lines);
+		static inline bool living_city = true;          // time / weather aware traffic and crowds
+
 	private:
 		struct command
 		{

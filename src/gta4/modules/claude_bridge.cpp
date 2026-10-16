@@ -411,6 +411,7 @@ namespace gta4
 		}
 
 		// telemetry on=0/1 interval=<sec>
+		if (cmd == "living_city") { living_city = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
 		if (cmd == "telemetry") { g_telemetry_on = i(c, "on", 1) != 0; g_telemetry_interval = std::max(1, i(c, "interval", 5)); reply(c, true, ""); return true; }
 
 		if (cmd == "status") { write_status(); reply(c, true, ""); return true; }
@@ -449,7 +450,8 @@ namespace gta4
 			n->ClearWantedLevel(n->ConvertIntToPlayerindex(n->GetPlayerId()));
 			n->SetMaxWantedLevel(static_cast<uint32_t>(i(c, "max_wanted", 0)));
 			if (has(c, "wind")) n->ForceWind(f(c, "wind"));
-			if (has(c, "cars")) { n->SetCarDensityMultiplier(f(c, "cars")); g_bench_cars = f(c, "cars"); }
+			// cars / peds >= 0 hold a fixed density every frame (benchmarks); < 0 hands control back (living city / game)
+			if (has(c, "cars")) { g_bench_cars = f(c, "cars"); if (g_bench_cars >= 0.0f) n->SetCarDensityMultiplier(g_bench_cars); }
 			if (has(c, "peds")) g_bench_peds = f(c, "peds");
 			if (has(c, "clear"))   // clear=<radius>: remove cars and peds around the player now
 			{
@@ -860,6 +862,27 @@ namespace gta4
 		return true;
 	}
 
+	bool claude_bridge::post_commands(const std::string& lines)
+	{
+		const auto b = get();
+		if (!b || !b->m_ready) return false;
+		static std::atomic<uint32_t> n{ 0 };
+		std::istringstream in(lines); std::string line; bool ok = true;
+		while (std::getline(in, line))
+		{
+			line = trim(line);
+			if (line.empty()) continue;
+			std::string body = "cmd=";
+			std::istringstream ls(line); std::string tok; bool first = true;
+			while (ls >> tok) { body += (first ? tok : "\n" + tok); first = false; }
+			char id[64]; sprintf_s(id, "ui_%010llu_%04u", static_cast<unsigned long long>(GetTickCount64()), n.fetch_add(1) % 10000);
+			const auto tmp = b->m_dir / "inbox" / (std::string(id) + ".tmp");
+			ok &= write_atomic(tmp, body + "\n");
+			std::error_code ec; std::filesystem::rename(tmp, b->m_dir / "inbox" / (std::string(id) + ".cmd"), ec); ok &= !ec;
+		}
+		return ok;
+	}
+
 	void claude_bridge::run_queue()
 	{
 		if (m_queue.empty()) return;
@@ -889,6 +912,23 @@ namespace gta4
 
 		if (playing && g_bench_peds >= 0.0f) { n->SetPedDensityMultiplier(g_bench_peds); n->SetScenarioPedDensityMultiplier(g_bench_peds, g_bench_peds); }
 		if (playing && g_bench_cars >= 0.0f) n->SetCarDensityMultiplier(g_bench_cars);
+
+		// living city: traffic and crowds follow the clock and the weather (benchmarks override it)
+		if (playing && living_city && g_bench_peds < 0.0f && g_bench_cars < 0.0f)
+		{
+			uint32_t hh = 12, mm = 0; n->GetTimeOfDay(&hh, &mm);
+			uint32_t w = 0; n->GetCurrentWeather(&w);
+			//                         0    1    2    3    4    5    6    7    8    9   10   11   12   13   14   15   16   17   18   19   20   21   22   23
+			static const float car[24] = { .55f,.45f,.35f,.30f,.35f,.50f,.75f,1.f, 1.f, .90f,.85f,.85f,.90f,.90f,.85f,.90f,1.f, 1.f, 1.f, .90f,.80f,.75f,.70f,.65f };
+			static const float ped[24] = { .55f,.45f,.30f,.25f,.25f,.35f,.60f,.90f,1.f, .90f,.85f,.90f,1.f, 1.f, .95f,.95f,1.f, 1.f, 1.f, .95f,.90f,.85f,.75f,.65f };
+			const float t = static_cast<float>(mm) / 60.0f; const uint32_t h1 = (hh + 1) % 24; hh %= 24;
+			float cd = car[hh] + (car[h1] - car[hh]) * t, pd = ped[hh] + (ped[h1] - ped[hh]) * t;
+			if (w == 4 || w == 7) pd *= 0.55f;          // raining / thunder: people stay inside
+			else if (w == 5) pd *= 0.8f;                // drizzle
+			n->SetCarDensityMultiplier(cd);
+			n->SetPedDensityMultiplier(pd);
+			n->SetScenarioPedDensityMultiplier(pd, pd);
+		}
 
 		g_tool_frame = b->m_frame;
 

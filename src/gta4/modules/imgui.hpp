@@ -541,6 +541,7 @@ namespace gta4
 
 	private:
 		void tab_about();
+		void tab_enhanced();
 		void tab_dev();
 		void tab_wip();
 		void tab_utilities();
