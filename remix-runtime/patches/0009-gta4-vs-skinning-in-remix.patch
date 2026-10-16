@@ -1,20 +1,22 @@
-From b924a28976f7b776ee98cffd7eaaf3057f7e7866 Mon Sep 17 00:00:00 2001
+From 9cd3aec05757baac911217f06cc55884677ad42d Mon Sep 17 00:00:00 2001
 From: gta4e <gta4e@local>
 Date: Fri, 16 Oct 2026 23:25:15 +0100
 Subject: [PATCH] p9
 
 ---
- src/d3d9/d3d9_rtx.cpp                         | 156 +++++++++++++++++-
+ src/d3d9/d3d9_rtx.cpp                         | 158 +++++++++++++++++-
  src/d3d9/d3d9_rtx.h                           |   4 +
  src/d3d9/d3d9_rtx_geometry.cpp                |   2 +-
  src/dxvk/rtx_render/rtx_geometry_utils.cpp    |   5 +
  src/dxvk/rtx_render/rtx_options.h             |   6 +
+ src/dxvk/rtx_render/rtx_types.cpp             |   4 +-
+ src/dxvk/rtx_render/rtx_types.h               |   1 +
  .../rtx/pass/gpu_skinning_binding_indices.h   |   5 +
  src/dxvk/shaders/rtx/pass/skinning.h          |  20 ++-
- 7 files changed, 190 insertions(+), 8 deletions(-)
+ 9 files changed, 196 insertions(+), 9 deletions(-)
 
 diff --git a/src/d3d9/d3d9_rtx.cpp b/src/d3d9/d3d9_rtx.cpp
-index 708433e..7d401d2 100644
+index 708433e..fce1d5f 100644
 --- a/src/d3d9/d3d9_rtx.cpp
 +++ b/src/d3d9/d3d9_rtx.cpp
 @@ -7,6 +7,7 @@
@@ -66,7 +68,7 @@ index 708433e..7d401d2 100644
        m_activeDrawCallState.programmableVertexShaderInfo = d3d9State().vertexShader->GetCommonShader()->GetInfo();
      }
      
-@@ -930,6 +939,145 @@ namespace dxvk {
+@@ -930,6 +939,147 @@ namespace dxvk {
      });
    }
  
@@ -116,9 +118,9 @@ index 708433e..7d401d2 100644
 +      m[3] = Vector4(r0.w, r1.w, r2.w, 1.f);
 +      switch (RtxOptions::Gta4e::vsSkinningBoneMode()) {
 +      default:
-+      case 0: bones[b] = world * m; break;
-+      case 1: bones[b] = world; break;
-+      case 2: bones[b] = m; break;
++      case 0: bones[b] = m; break;               // object space (objectToWorld = World)
++      case 1: bones[b] = world * m; break;       // world space + camera decomposition (D3D9 FF convention)
++      case 2: bones[b] = Matrix4(); break;       // bind pose test
 +      case 3: {
 +        Matrix4 t;   // rows used as columns instead
 +        t[0] = Vector4(r0.x, r0.y, r0.z, 0.f);
@@ -186,7 +188,8 @@ index 708433e..7d401d2 100644
 +    const uint32_t numBonesPerVertex = 4;
 +    const uint32_t vertexCount = geoData.vertexCount;
 +
-+    return m_pGeometryWorkers->Schedule([boneMatrices, blendIndices, numBonesPerVertex, vertexCount, maxBones]()->SkinningData {
++    const bool objectSpace = RtxOptions::Gta4e::vsSkinningBoneMode() != 1 && RtxOptions::Gta4e::vsSkinningBoneMode() != 3;
++    return m_pGeometryWorkers->Schedule([boneMatrices, blendIndices, numBonesPerVertex, vertexCount, maxBones, objectSpace]()->SkinningData {
 +      ScopedCpuProfileZone();
 +      int minBoneIndex = 0, maxBoneIndex = -1;
 +      if (!getMinMaxBoneIndices(blendIndices.pBase, blendIndices.stride, vertexCount, numBonesPerVertex, minBoneIndex, maxBoneIndex)) {
@@ -204,6 +207,7 @@ index 708433e..7d401d2 100644
 +      skinningData.minBoneIndex = std::min<uint32_t>(static_cast<uint32_t>(minBoneIndex), numBones - 1);
 +      skinningData.numBones = numBones;
 +      skinningData.numBonesPerVertex = numBonesPerVertex;
++      skinningData.gta4eObjectSpace = objectSpace;
 +      skinningData.computeHash();
 +      return skinningData;
 +    });
@@ -257,7 +261,7 @@ index 88de3c9..0eee533 100644
      // If we don't have a mappable vertex buffer then we need to do this on the GPU
      bool mustUseGPU = drawCallState.getGeometryData().positionBuffer.mapPtr() == nullptr;
 diff --git a/src/dxvk/rtx_render/rtx_options.h b/src/dxvk/rtx_render/rtx_options.h
-index 3cc86cd..8efa4cf 100644
+index 3cc86cd..ea74f3b 100644
 --- a/src/dxvk/rtx_render/rtx_options.h
 +++ b/src/dxvk/rtx_render/rtx_options.h
 @@ -1114,6 +1114,12 @@ namespace dxvk {
@@ -269,10 +273,37 @@ index 3cc86cd..8efa4cf 100644
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningWeightSwizzle, 0, "0 = weights read like the game shader (D3DCOLOR .xyzw vs D3DCOLORtoUBYTE4 indices), 1 = memory order.");
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningMaxBones, 64, "Max bones read from VS constants.");
 +      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningDebugLog, 0, "Log this many skinned draws (matrices, first vertices, CPU-skinned result) to the Remix log each time the value changes.");
-+      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningBoneMode, 0, "0 = World * bone, 1 = World only (bind pose test), 2 = bone only, 3 = World * transpose(bone).");
++      RTX_OPTION("rtx.gta4e", uint32_t, vsSkinningBoneMode, 0, "0 = object-space bones (objectToWorld = World), 1 = world-space bones (D3D9 FF style), 2 = bind pose test, 3 = world * transposed bone.");
      } gta4e;
  
      struct OpacityMicromap {
+diff --git a/src/dxvk/rtx_render/rtx_types.cpp b/src/dxvk/rtx_render/rtx_types.cpp
+index 21379f5..b310240 100644
+--- a/src/dxvk/rtx_render/rtx_types.cpp
++++ b/src/dxvk/rtx_render/rtx_types.cpp
+@@ -333,7 +333,9 @@ namespace dxvk {
+       assert(geometryData.blendWeightBuffer.defined());
+       assert(skinningData.numBonesPerVertex <= 4);
+ 
+-      if (pLastCamera != nullptr) {
++      if (skinningData.gta4eObjectSpace) {
++        // bones map model space -> object space; objectToWorld stays the draw's world matrix
++      } else if (pLastCamera != nullptr) {
+         const auto fusedMode = RtxOptions::fusedWorldViewMode();
+         if (likely(fusedMode == FusedWorldViewMode::None)) {
+           transformData.objectToView = transformData.worldToView;
+diff --git a/src/dxvk/rtx_render/rtx_types.h b/src/dxvk/rtx_render/rtx_types.h
+index b2371bc..faa3a96 100644
+--- a/src/dxvk/rtx_render/rtx_types.h
++++ b/src/dxvk/rtx_render/rtx_types.h
+@@ -298,6 +298,7 @@ struct SkinningData {
+   uint32_t numBonesPerVertex = 0;
+   XXH64_hash_t boneHash = 0;
+   uint32_t minBoneIndex = 0; // This is the smallest index of all bones actually used by vertex data
++  bool gta4eObjectSpace = false; // gta4e: bones are object-space, keep objectToWorld (no camera decomposition)
+ 
+   void computeHash() {
+     if (numBones > 0) {
 diff --git a/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h b/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h
 index ec4e860..391a773 100644
 --- a/src/dxvk/shaders/rtx/pass/gpu_skinning_binding_indices.h
