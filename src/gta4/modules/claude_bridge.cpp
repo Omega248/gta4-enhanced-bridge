@@ -438,6 +438,37 @@ namespace gta4
 			return true;
 		}
 
+		// wait_idle [max_s=900] [quiet_s=10] : waits until RTX Remix has finished loading replacement
+		// materials/assets (no UsdMod::processMaterial activity in rtx-remix/gta4e_profile.txt for quiet_s).
+		// Benchmarks taken while "Loading enhancements" runs are meaningless, so scripts call this first.
+		if (cmd == "wait_idle")
+		{
+			const ULONGLONG now = GetTickCount64();
+			if (c.step == 0) { c.note = std::to_string(now) + ";" + std::to_string(now); c.step = 1; }
+			const auto sep = c.note.find(';');
+			const ULONGLONG t0 = std::stoull(c.note.substr(0, sep));
+			ULONGLONG last_busy = std::stoull(c.note.substr(sep + 1));
+			static ULONGLONG s_next_poll = 0;
+			if (now >= s_next_poll)
+			{
+				s_next_poll = now + 2000;
+				const std::string prof = read_text(std::filesystem::path("rtx-remix") / "gta4e_profile.txt");
+				bool busy = false;
+				if (const auto at = prof.find("processMaterial"); at != std::string::npos)
+				{
+					// "Z dxvk::UsdMod::Impl::processMaterial   <ms>   <calls>"
+					std::istringstream ls(prof.substr(at + 15, 80)); float ms = 0, calls = 0; ls >> ms >> calls;
+					busy = calls > 0.02f || ms > 0.5f;
+				}
+				if (busy) { last_busy = now; c.note = std::to_string(t0) + ";" + std::to_string(last_busy); }
+			}
+			const bool quiet = now - last_busy >= static_cast<ULONGLONG>(f(c, "quiet_s", 10.0f) * 1000.0f);
+			const bool timeout = now - t0 >= static_cast<ULONGLONG>(f(c, "max_s", 900.0f) * 1000.0f);
+			if (!quiet && !timeout) return false;
+			char b2[96]; sprintf_s(b2, "\"waited_s\":%.0f,\"timeout\":%s", (now - t0) / 1000.0, timeout && !quiet ? "true" : "false");
+			reply(c, true, b2); return true;
+		}
+
 		if (cmd == "wait")
 		{
 			if (c.step == 0) { c.note = std::to_string(GetTickCount64()); c.step = 1; }
