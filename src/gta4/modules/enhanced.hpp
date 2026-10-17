@@ -38,6 +38,10 @@ namespace gta4::enhanced
 		bool  weather_city = true;       // weather affects them too
 		float traffic_scale = 1.0f;      // user multipliers on top
 		float crowd_scale = 1.0f;
+
+		// performance: resend unchanged static draws only every k-th frame (0/1 = off). Remix must keep
+		// instances alive longer than k frames: rtx.numFramesToKeepInstances / numFramesToKeepBLAS > k in rtx.conf
+		int   retain_k = 4;
 	};
 
 	settings_t& settings();

@@ -32,6 +32,7 @@ namespace gta4
 		static bool post_commands(const std::string& lines);
 		static inline bool living_city = true;          // time / weather aware traffic and crowds (driven by enhanced.cpp)
 		static bool density_overridden();               // a benchmark / "calm" command is holding traffic densities
+		static void set_retain(int k);                  // retained static world: resend unchanged draws every k-th frame, k < 2 = off
 
 	private:
 		struct command

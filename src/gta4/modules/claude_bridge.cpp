@@ -1016,6 +1016,13 @@ namespace gta4
 
 	bool claude_bridge::density_overridden() { return g_bench_peds >= 0.0f || g_bench_cars >= 0.0f; }
 
+	void claude_bridge::set_retain(int k)
+	{
+		dedupe_device::g_retain_k = std::max(2, std::min(16, k));
+		dedupe_device::g_retain_shaders = true;
+		dedupe_device::g_retain = k > 1;
+	}
+
 	bool claude_bridge_screenshot_bmp(const std::filesystem::path& out, int& w, int& h) { return screenshot_bmp(out, w, h); }
 
 	bool claude_bridge::post_commands(const std::string& lines)
