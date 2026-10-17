@@ -3,6 +3,8 @@
 // Every ScopedCpuProfileZone / ScopedGpuProfileZone site accumulates call count and inclusive time.
 // A background thread writes the top zones (ms per frame) to rtx-remix/gta4e_profile.txt every 2 s,
 // together with the gta4e counters (e.g. BLAS bucket statistics). No Tracy GUI needed.
+// Each site also keeps exclusive time (minus nested zones) per thread, so the file shows which
+// thread does the work (e.g. the dxvk CS thread) and what fills it ("T"/"E" lines at the end).
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -17,11 +19,17 @@
 
 namespace gta4e {
 
+  // threads beyond this share the last slot ("other")
+  constexpr uint32_t kMaxThreads = 24;
+
   struct ZoneSite {
     const char* name;
     std::atomic<uint64_t> ticks { 0 };
     std::atomic<uint64_t> calls { 0 };
     uint64_t lastTicks = 0, lastCalls = 0;
+    std::atomic<uint64_t> exclTicks[kMaxThreads] {};
+    std::atomic<uint64_t> exclCalls[kMaxThreads] {};
+    uint64_t lastExclTicks[kMaxThreads] {}, lastExclCalls[kMaxThreads] {};
     explicit ZoneSite(const char* n);
   };
 
@@ -37,8 +45,27 @@ namespace gta4e {
     std::vector<ZoneSite*> sites;
     std::vector<Counter*> counters;
     std::atomic<bool> started { false };
+    std::atomic<uint32_t> nextThread { 0 };
+    std::atomic<DWORD> threadIds[kMaxThreads] {};
     static Registry& get() { static Registry r; return r; }
   };
+
+  // per-thread nesting state for exclusive time: each open zone collects its children's inclusive time
+  struct ThreadState {
+    uint32_t slot = UINT32_MAX;
+    uint32_t depth = 0;
+    uint64_t childTicks[64] {};
+  };
+
+  inline ThreadState& threadState() {
+    thread_local ThreadState t;
+    if (t.slot == UINT32_MAX) {
+      auto& r = Registry::get();
+      t.slot = (std::min)(r.nextThread.fetch_add(1, std::memory_order_relaxed), kMaxThreads - 1);
+      if (t.slot < kMaxThreads - 1) r.threadIds[t.slot].store(GetCurrentThreadId(), std::memory_order_relaxed);
+    }
+    return t;
+  }
 
   inline void writerThread();
 
@@ -65,13 +92,40 @@ namespace gta4e {
 
   struct ZoneTimer {
     ZoneSite& site;
+    ThreadState& ts;
     uint64_t start;
-    explicit ZoneTimer(ZoneSite& s) : site(s), start(__rdtsc()) {}
+    explicit ZoneTimer(ZoneSite& s) : site(s), ts(threadState()), start(__rdtsc()) {
+      if (ts.depth < 64) ts.childTicks[ts.depth] = 0;
+      ++ts.depth;
+    }
     ~ZoneTimer() {
-      site.ticks.fetch_add(__rdtsc() - start, std::memory_order_relaxed);
+      const uint64_t elapsed = __rdtsc() - start;
+      site.ticks.fetch_add(elapsed, std::memory_order_relaxed);
       site.calls.fetch_add(1, std::memory_order_relaxed);
+      const uint32_t d = --ts.depth;
+      const uint64_t child = d < 64 ? ts.childTicks[d] : 0;
+      if (d > 0 && d - 1 < 64) ts.childTicks[d - 1] += elapsed;
+      site.exclTicks[ts.slot].fetch_add(elapsed > child ? elapsed - child : 0, std::memory_order_relaxed);
+      site.exclCalls[ts.slot].fetch_add(1, std::memory_order_relaxed);
     }
   };
+
+  // thread name set by the runtime (dxvk names its threads, e.g. the CS thread), "" if unavailable
+  inline std::string threadName(DWORD tid) {
+    using Fn = HRESULT(WINAPI*)(HANDLE, PWSTR*);
+    static const Fn getDesc = reinterpret_cast<Fn>(GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadDescription"));
+    std::string out;
+    if (!getDesc || !tid) return out;
+    HANDLE h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, tid);
+    if (!h) return out;  // thread has exited
+    PWSTR w = nullptr;
+    if (SUCCEEDED(getDesc(h, &w)) && w) {
+      for (const wchar_t* p = w; *p && out.size() < 40; ++p) out.push_back(*p < 128 && *p > ' ' ? char(*p) : '_');
+      LocalFree(w);
+    }
+    CloseHandle(h);
+    return out;
+  }
 
   inline double ticksPerMs() {
     static double tpm = [] {
@@ -119,6 +173,39 @@ namespace gta4e {
       fprintf(f, "# zones: inclusive ms per frame, calls per frame\n");
       for (size_t i = 0; i < rows.size() && i < 120; ++i)
         fprintf(f, "Z %-60s %9.3f %10.1f\n", rows[i].name, rows[i].ms / frames, double(rows[i].calls) / frames);
+
+      // per thread: exclusive zone time (ms per frame), busiest threads first, top zones of each
+      struct Excl { const char* name; double ms; uint64_t calls; };
+      std::vector<Excl> perThread[kMaxThreads];
+      double threadMs[kMaxThreads] {};
+      for (auto* s : sites) {
+        for (uint32_t t = 0; t < kMaxThreads; ++t) {
+          const uint64_t et = s->exclTicks[t].load(), ec = s->exclCalls[t].load();
+          const uint64_t dt = et - s->lastExclTicks[t], dc = ec - s->lastExclCalls[t];
+          s->lastExclTicks[t] = et; s->lastExclCalls[t] = ec;
+          if (!dc) continue;
+          const double ms = double(dt) / tpm / frames;
+          perThread[t].push_back({ s->name, ms, dc });
+          threadMs[t] += ms;
+        }
+      }
+      uint32_t order[kMaxThreads];
+      for (uint32_t t = 0; t < kMaxThreads; ++t) order[t] = t;
+      std::sort(order, order + kMaxThreads, [&](uint32_t a, uint32_t b) { return threadMs[a] > threadMs[b]; });
+      fprintf(f, "# threads: exclusive zone ms per frame (T slot tid name total), then that thread's top zones\n");
+      for (uint32_t i = 0; i < kMaxThreads; ++i) {
+        const uint32_t t = order[i];
+        if (threadMs[t] < 0.05) break;
+        const DWORD tid = t < kMaxThreads - 1 ? r.threadIds[t].load() : 0;
+        static std::string names[kMaxThreads];  // cached: the name stays readable after the thread exits
+        if (names[t].empty()) names[t] = t < kMaxThreads - 1 ? threadName(tid) : std::string("other");
+        const std::string& tn = names[t];
+        fprintf(f, "T %2u %6lu %-24s %9.3f\n", t, static_cast<unsigned long>(tid), tn.empty() ? "?" : tn.c_str(), threadMs[t]);
+        auto& v = perThread[t];
+        std::sort(v.begin(), v.end(), [](const Excl& a, const Excl& b) { return a.ms > b.ms; });
+        for (size_t k = 0; k < v.size() && k < 15; ++k)
+          fprintf(f, "E %-60s %9.3f %10.1f\n", v[k].name, v[k].ms, double(v[k].calls) / frames);
+      }
       fclose(f);
       MoveFileExA("rtx-remix\\gta4e_profile.tmp", "rtx-remix\\gta4e_profile.txt", MOVEFILE_REPLACE_EXISTING);
     }
