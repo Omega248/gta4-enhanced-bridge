@@ -1,4 +1,5 @@
 #include "std_include.hpp"
+#include "enhanced.hpp"
 #include "imgui.hpp"
 
 #include "comp_settings.hpp"
@@ -72,8 +73,14 @@ namespace gta4
 
 	bool imgui::input_message(const UINT message_type, const WPARAM wparam, const LPARAM lparam)
 	{
+		// GTA IV Enhanced player menu (F7 by default)
+		if (enhanced::on_key(message_type, wparam)) {
+			return true;
+		}
+
 		if (message_type == WM_KEYUP && wparam == VK_F4) 
 		{
+			enhanced::menu_open = false;
 			const auto& io = ImGui::GetIO();
 			if (!io.MouseDown[1]) {
 				shared::globals::imgui_menu_open = !shared::globals::imgui_menu_open;
@@ -2780,39 +2787,7 @@ namespace gta4
 	// GTA IV Enhanced - one panel for the things people actually want while playing
 	void imgui::tab_enhanced()
 	{
-		const float w4 = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 3.0f) / 4.0f;
-		auto post = [](const char* lines) { claude_bridge::post_commands(lines); };
-
-		ImGui::SeparatorText("    Time of day     ");
-		if (ImGui::Button("Dawn 06:00", ImVec2(w4, 0)))        post("time hour=6 minute=0");     ImGui::SameLine();
-		if (ImGui::Button("Midday 13:00", ImVec2(w4, 0)))      post("time hour=13 minute=0");    ImGui::SameLine();
-		if (ImGui::Button("Golden hour 19:30", ImVec2(w4, 0))) post("time hour=19 minute=30");   ImGui::SameLine();
-		if (ImGui::Button("Night 23:30", ImVec2(w4, 0)))       post("time hour=23 minute=30");
-		if (ImGui::Button("Release clock", ImVec2(w4, 0)))     post("release_time");
-
-		ImGui::SeparatorText("    Weather     ");
-		if (ImGui::Button("Clear", ImVec2(w4, 0)))   post("weather id=0"); ImGui::SameLine();
-		if (ImGui::Button("Cloudy", ImVec2(w4, 0)))  post("weather id=3"); ImGui::SameLine();
-		if (ImGui::Button("Rain", ImVec2(w4, 0)))    post("weather id=4"); ImGui::SameLine();
-		if (ImGui::Button("Storm", ImVec2(w4, 0)))   post("weather id=7");
-		if (ImGui::Button("Fog", ImVec2(w4, 0)))     post("weather id=6"); ImGui::SameLine();
-		if (ImGui::Button("Release weather", ImVec2(w4, 0))) post("release_weather");
-
-		ImGui::SeparatorText("    Photo / cinema     ");
-		if (ImGui::Button("Hide HUD", ImVec2(w4, 0)))  post("hud on=0"); ImGui::SameLine();
-		if (ImGui::Button("Show HUD", ImVec2(w4, 0)))  post("hud on=1"); ImGui::SameLine();
-		if (ImGui::Button("No police", ImVec2(w4, 0))) post("calm max_wanted=0"); ImGui::SameLine();
-		if (ImGui::Button("Police on", ImVec2(w4, 0))) post("calm max_wanted=6");
-
-		ImGui::SeparatorText("    City life     ");
-		ImGui::Checkbox("Living city (traffic and crowds follow time of day and weather)", &claude_bridge::living_city);
-		if (ImGui::Button("Empty streets", ImVec2(w4, 0))) post("calm cars=0 peds=0 clear=150"); ImGui::SameLine();
-		if (ImGui::Button("Normal streets", ImVec2(w4, 0)))  post("calm cars=-1 peds=-1");
-
-		ImGui::SeparatorText("    Tools     ");
-		if (ImGui::Button("Run benchmark", ImVec2(w4, 0))) post("script file=bench_std");
-		ImGui::SameLine(); ImGui::TextDisabled("results: Downloads\\GTA4-Enhanced-Setup\\bridge\\reports");
-		ImGui::TextDisabled("Car handling presets: run 'HANDLING - REALISTIC.bat' or 'HANDLING - CLASSIC.bat' in the game folder (applies next launch).");
+		enhanced::draw_tab_contents();
 	}
 
 	void imgui::tab_utilities()
@@ -6192,7 +6167,11 @@ namespace gta4
 					if (shared::globals::imgui_menu_open) 
 					{
 						io.MouseDrawCursor = true;
-						im->devgui();
+						if (enhanced::menu_open) {
+							enhanced::draw_menu();
+						} else {
+							im->devgui();
+						}
 
 						// ---
 						// enable game input via right mouse button logic

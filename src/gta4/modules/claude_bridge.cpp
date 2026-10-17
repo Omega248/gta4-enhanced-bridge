@@ -16,6 +16,7 @@
 #include "natives.hpp"
 #include "remix_vars.hpp"
 #include "shared/common/remix_api.hpp"
+#include "enhanced.hpp"
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -557,7 +558,9 @@ namespace gta4
 		if (cmd == "stop_tasks") { n->ClearCharTasks(ped); reply(c, true, ""); return true; }
 		if (cmd == "control") { n->SetPlayerControl(player, i(c, "on", 1) != 0); reply(c, true, ""); return true; }
 
-		if (cmd == "living_city") { living_city = i(c, "on", 1) != 0; reply(c, true, ""); return true; }
+		if (cmd == "living_city") { living_city = i(c, "on", 1) != 0; enhanced::settings().living_city = living_city; enhanced::save_settings(); reply(c, true, ""); return true; }
+		if (cmd == "photo") { enhanced::bridge_photo(i(c, "on", 1) != 0); reply(c, true, ""); return true; }
+		if (cmd == "quicksave") { enhanced::bridge_quicksave(); reply(c, true, ""); return true; }
 		if (cmd == "telemetry") { g_telemetry_on = i(c, "on", 1) != 0; g_telemetry_interval = std::max(1, i(c, "interval", 5)); reply(c, true, ""); return true; }
 
 		if (cmd == "status") { write_status(); reply(c, true, ""); return true; }
@@ -1011,6 +1014,10 @@ namespace gta4
 		return true;
 	}
 
+	bool claude_bridge::density_overridden() { return g_bench_peds >= 0.0f || g_bench_cars >= 0.0f; }
+
+	bool claude_bridge_screenshot_bmp(const std::filesystem::path& out, int& w, int& h) { return screenshot_bmp(out, w, h); }
+
 	bool claude_bridge::post_commands(const std::string& lines)
 	{
 		const auto b = get();
@@ -1062,22 +1069,7 @@ namespace gta4
 		if (playing && g_bench_peds >= 0.0f) { n->SetPedDensityMultiplier(g_bench_peds); n->SetScenarioPedDensityMultiplier(g_bench_peds, g_bench_peds); }
 		if (playing && g_bench_cars >= 0.0f) n->SetCarDensityMultiplier(g_bench_cars);
 
-		// living city: traffic and crowds follow the clock and the weather (benchmarks override it)
-		if (playing && living_city && g_bench_peds < 0.0f && g_bench_cars < 0.0f)
-		{
-			uint32_t hh = 12, mm = 0; n->GetTimeOfDay(&hh, &mm);
-			uint32_t w = 0; n->GetCurrentWeather(&w);
-			//                         0    1    2    3    4    5    6    7    8    9   10   11   12   13   14   15   16   17   18   19   20   21   22   23
-			static const float car[24] = { .55f,.45f,.35f,.30f,.35f,.50f,.75f,1.f, 1.f, .90f,.85f,.85f,.90f,.90f,.85f,.90f,1.f, 1.f, 1.f, .90f,.80f,.75f,.70f,.65f };
-			static const float ped[24] = { .55f,.45f,.30f,.25f,.25f,.35f,.60f,.90f,1.f, .90f,.85f,.90f,1.f, 1.f, .95f,.95f,1.f, 1.f, 1.f, .95f,.90f,.85f,.75f,.65f };
-			const float t = static_cast<float>(mm) / 60.0f; const uint32_t h1 = (hh + 1) % 24; hh %= 24;
-			float cd = car[hh] + (car[h1] - car[hh]) * t, pd = ped[hh] + (ped[h1] - ped[hh]) * t;
-			if (w == 4 || w == 7) pd *= 0.55f;          // raining / thunder: people stay inside
-			else if (w == 5) pd *= 0.8f;                // drizzle
-			n->SetCarDensityMultiplier(cd);
-			n->SetPedDensityMultiplier(pd);
-			n->SetScenarioPedDensityMultiplier(pd, pd);
-		}
+		// living city (time + weather aware traffic and crowds) now lives in enhanced.cpp
 
 		g_tool_frame = b->m_frame;
 

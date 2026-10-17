@@ -30,7 +30,8 @@ namespace gta4
 		// queue bridge commands from inside the game (e.g. the in-game Enhanced panel): one command per
 		// line, "cmd k=v k=v". Written to the inbox, so it runs on the game thread like any other command.
 		static bool post_commands(const std::string& lines);
-		static inline bool living_city = true;          // time / weather aware traffic and crowds
+		static inline bool living_city = true;          // time / weather aware traffic and crowds (driven by enhanced.cpp)
+		static bool density_overridden();               // a benchmark / "calm" command is holding traffic densities
 
 	private:
 		struct command

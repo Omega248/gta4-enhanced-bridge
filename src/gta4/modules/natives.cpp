@@ -5,6 +5,7 @@
 #include "imgui.hpp"
 #include "remix_vars.hpp"
 #include "claude_bridge.hpp"
+#include "enhanced.hpp"
 
 namespace gta4
 {
@@ -49,6 +50,7 @@ namespace gta4
 
 		discord::update_discord();
 		claude_bridge::on_frame();   // GTA IV Enhanced: external command bridge
+		enhanced::on_frame();        // GTA IV Enhanced: photo mode, save anywhere, HUD modes, weather-aware city
 
 		// ----
 
