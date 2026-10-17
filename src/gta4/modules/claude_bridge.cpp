@@ -465,11 +465,14 @@ namespace gta4
 				s_next_poll = now + 2000;
 				const std::string prof = read_text(std::filesystem::path("rtx-remix") / "gta4e_profile.txt");
 				bool busy = false;
-				if (const auto at = prof.find("processMaterial"); at != std::string::npos)
+				// any replacement-asset loading zone in the last window means "Loading enhancements" is still running
+				for (const char* zone : { "processMaterial", "AssetDataManager::findAsset", "makeStagingForTextureAsset", "UsdMod::Impl::processPrim" })
 				{
-					// "Z dxvk::UsdMod::Impl::processMaterial   <ms>   <calls>"
-					std::istringstream ls(prof.substr(at + 15, 80)); float ms = 0, calls = 0; ls >> ms >> calls;
-					busy = calls > 0.02f || ms > 0.5f;
+					if (const auto at = prof.find(zone); at != std::string::npos)
+					{
+						std::istringstream ls(prof.substr(at + strlen(zone), 80)); float ms = 0, calls = 0; ls >> ms >> calls;
+						if (calls > 0.02f || ms > 0.3f) { busy = true; break; }
+					}
 				}
 				if (busy) { last_busy = now; c.note = std::to_string(t0) + ";" + std::to_string(last_busy); }
 			}

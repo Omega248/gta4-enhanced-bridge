@@ -1,0 +1,31 @@
+From 80b3405b6acb6c4d34c04b6d02d859ea3e0cb6c6 Mon Sep 17 00:00:00 2001
+From: gta4e <gta4e@local>
+Date: Sat, 17 Oct 2026 04:56:02 +0100
+Subject: [PATCH] p11
+
+---
+ src/d3d9/d3d9_rtx_geometry.cpp | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/d3d9/d3d9_rtx_geometry.cpp b/src/d3d9/d3d9_rtx_geometry.cpp
+index e1a357a..ebfdd7a 100644
+--- a/src/d3d9/d3d9_rtx_geometry.cpp
++++ b/src/d3d9/d3d9_rtx_geometry.cpp
+@@ -157,7 +157,13 @@ namespace dxvk {
+ 
+     // Assume the GPU changed the data via shaders, include the constant buffer data in hash
+     XXH64_hash_t vertexShaderHash = kEmptyHash;
+-    if (m_parent->UseProgrammableVS() && useVertexCapture() && !m_gta4eHashWithoutVsConsts) {
++    if (m_gta4eHashWithoutVsConsts && m_parent->UseProgrammableVS()) {
++      // gta4e skinned VS mesh: hash the shader (different passes stay separate) but not its per-frame constants
++      if (RtxOptions::geometryHashGenerationRule().test(HashComponents::GeometryDescriptor)) {
++        auto& shaderByteCode = d3d9State().vertexShader->GetCommonShader()->GetBytecode();
++        vertexShaderHash = XXH3_64bits(shaderByteCode.data(), shaderByteCode.size());
++      }
++    } else if (m_parent->UseProgrammableVS() && useVertexCapture()) {
+       if (RtxOptions::geometryHashGenerationRule().test(HashComponents::GeometryDescriptor)) {
+         const D3D9ConstantSets& cb = m_parent->m_consts[DxsoProgramTypes::VertexShader];
+         auto& shaderByteCode = d3d9State().vertexShader->GetCommonShader()->GetBytecode();
+-- 
+2.43.0
+
