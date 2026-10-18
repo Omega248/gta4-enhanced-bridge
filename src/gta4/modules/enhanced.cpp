@@ -383,11 +383,16 @@ namespace gta4::enhanced
 	bool photo_active() { return g_photo.active; }
 	const char* last_message() { return GetTickCount64() < g_message_until ? g_message.c_str() : ""; }
 
+	namespace
+	{
+		void apply_performance() { claude_bridge::set_retain(g_settings.retain_k); }
+	}
+
 	void load_settings()
 	{
 		g_loaded = true;
 		std::ifstream in(ini_path());
-		if (!in) { save_settings(); return; }
+		if (!in) { save_settings(); apply_performance(); return; }
 		std::string line;
 		while (std::getline(in, line))
 		{
@@ -413,8 +418,10 @@ namespace gta4::enhanced
 			else if (k == "weather_city") s.weather_city = i != 0;
 			else if (k == "traffic_scale") s.traffic_scale = std::clamp(f, 0.0f, 2.0f);
 			else if (k == "crowd_scale") s.crowd_scale = std::clamp(f, 0.0f, 2.0f);
+			else if (k == "retain_k") s.retain_k = std::clamp(i, 0, 16);
 		}
 		claude_bridge::living_city = g_settings.living_city;
+		apply_performance();
 	}
 
 	void save_settings()
@@ -434,6 +441,8 @@ namespace gta4::enhanced
 		o << "[city]\n";
 		ini_write(o, "living_city", s.living_city); ini_write(o, "weather_city", s.weather_city);
 		ini_write(o, "traffic_scale", s.traffic_scale); ini_write(o, "crowd_scale", s.crowd_scale);
+		o << "[performance]\n; resend unchanged static draws every k-th frame (0 = off); needs rtx.numFramesToKeepInstances/BLAS > k\n";
+		ini_write(o, "retain_k", s.retain_k);
 	}
 
 	bool on_key(UINT msg, WPARAM wparam)
