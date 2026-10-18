@@ -4,7 +4,7 @@ Statuses: Not investigated / Investigated / In development / Implemented but unv
 
 | Feature | Status | Evidence / notes |
 |---|---|---|
-| Native 64-bit game executable | Blocked | PC exe is 32-bit, no source (ADR-001). Recompilation route needs an Xbox 360 copy, which is not on this PC |
+| Native 64-bit game executable | Blocked (game files) | Xbox 360 recompilation toolchain built and verified on this PC (`C:\GTAIV-Recomp`: rexglue SDK x86-64, Clang 22.1.8, project configure reaches codegen). Needs the user's Xbox 360 disc image + TU8 for codegen. Known upstream blocker after that: static collision never loads |
 | 64-bit renderer process | Verified | Remix runtime (`.trex/d3d9.dll`, NvRemixBridge) is x64 |
 | Modern backend (Vulkan) | Verified | Remix/DXVK Vulkan, `remix-dxvk.log` |
 | Hardware path tracing | Verified | Remix path tracer running, per-pass GPU zones (Gbuffer/Integrate raytracing) in `gta4e_profile.txt` |
