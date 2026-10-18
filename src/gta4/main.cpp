@@ -348,7 +348,7 @@ HMODULE WINAPI LoadLibraryW_hk(LPCWSTR lpFileName)
 }
 #endif
 
-namespace gta4 { void start_autostart_watcher(); }
+namespace gta4 { void start_autostart_watcher(); void start_asset_prefetch(); }
 
 BOOL APIENTRY DllMain(HMODULE hmodule, const DWORD ul_reason_for_call, LPVOID)
 {
@@ -374,6 +374,7 @@ BOOL APIENTRY DllMain(HMODULE hmodule, const DWORD ul_reason_for_call, LPVOID)
 		std::cout << "> https://github.com/xoxor4d/gta4-rtx\n\n";
 		shared::common::set_console_color_default();
 		gta4::start_autostart_watcher();   // GTA IV Enhanced: no-click launch while <bridge>/autostart exists
+		gta4::start_asset_prefetch();      // GTA IV Enhanced: warm the file cache for Remix mod textures (startup loading)
 
 		if (const auto MH_INIT_STATUS = MH_Initialize(); MH_INIT_STATUS != MH_STATUS::MH_OK)
 		{

@@ -14,13 +14,13 @@ Statuses: Not investigated / Investigated / In development / Implemented but unv
 | Real 60 fps in heavy scenes | In development | Star Junction 36-46 real fps; limits: Remix CS thread, bridge thread, render thread, GPU ~27 ms |
 | Frame overlap (2 frames in flight) | Verified | +12.5% static fps, 4 alternating launches (overlap A/B, 2026-10-18) |
 | Persistent identity-tagged instances | Implemented but unverified | Tags 637 draws/frame, skips ~1,300, CS -9 ms; fps gain not yet measured cleanly; visuals unchecked |
-| Per-pass GPU timing | Implemented but unverified | b16: G lines present but under-sampled; b17 fix deployed, startup check pending |
+| Per-pass GPU timing | Implemented but unverified | b17: top-level InjectRTX timed every frame (13.8 ms GPU at spawn, 64 fps); nested sub-passes still under-sampled |
 | Scene probe (draw/entity statistics) | Verified | `probe_083757.jsonl`: 2,840 draws, 861 entities, 350 models |
 | PBR / upscaled materials | Verified | ~88,600 material overrides in installed USD layers |
 | Parallax / displacement materials | Verified | `rtx.displacement.mode = 2`; factor reduced to 1 after "too much depth" feedback |
 | Parallax interiors (window depth) | Not investigated | |
 | 4K texture pipeline (repeatable) | Investigated | Existing tools in `GTA4-Enhanced-Setup` (upscale, material rules); not re-audited this session |
-| Startup material-loading cost | Investigated | ~40 ms/frame for 4-5 min after launch (`persist_092553.jsonl`) |
+| Startup material-loading cost | Verified | Parallel DDS header prefetch at launch (mod, `asset_prefetch.cpp`): loading done ~40 s after control instead of 4-5 min; findAsset 4.6 -> 0.1-0.2 ms/call (`loadtime_*.jsonl`, `rtx-remix/logs/gta4e_prefetch.log`) |
 | Ultrawide / high refresh / HDR | Not investigated | |
 | Graphics presets (Low...Path Tracing) | Not investigated | |
 | Gameplay preservation | Verified (by design) | Original executable and scripts, hooks only; no mission regression suite yet |
