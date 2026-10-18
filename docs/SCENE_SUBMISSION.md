@@ -1,5 +1,9 @@
 # Game-aware scene submission (design, 2026-10-18)
 
+> **Revised after architect review (2026-10-18), see "Revision" at the end.** Short version: persistent,
+> identity-tagged instances on the existing D3D9 path first; Remix API meshes only later, for what D3D9
+> cannot express; and measure/cut GPU cost in parallel, because the GPU is the next wall.
+
 ## Goal
 Real 60 fps (no frame generation) in heavy scenes with path tracing, and correct materials, by
 having the mod tell Remix what the scene *is* instead of Remix rebuilding it from ~3,000 D3D9
@@ -85,3 +89,42 @@ part drops from ~2,150 draws + their state calls to the instances that change.
   but needs a budget.
 - Per-frame DrawInstance traffic before phase 2 (one bridge command per visible entity).
 - Bridge API limits: no CreateTexture/SetupCamera across the bridge (camera still comes from D3D9).
+
+## Revision (architect review + relieved GPU map, 2026-10-18)
+
+### Corrections
+- "Not GPU bound" was wrong: those tests ran while the CS thread was saturated. With the CPU relieved
+  (retain k=8, keep 10) Star Junction runs ~36 fps with the GPU busy ~27 ms/frame (dxvk-queue fence
+  waits). Resolution scale 0.5: -2% (noise); pathMaxBounces 1: +2%; enableSecondaryBounces off: +18%;
+  frame generation off: +7%; hiding all static world draws: +31% (GPU 21 ms). Most GPU cost is not
+  resolution dependent.
+- API draws go through processDrawCallState every frame (rtx_scene_manager.cpp submitExternalDraw), so
+  API submission alone saves ~0-2 ms of CS time. The gain comes from persistence, which does not need
+  the API.
+- API instances lose the per-draw extras (render states 42/149/150/169/177/210-220), legacy-hash rules
+  (150/220) and get a fixed REPEAT sampler; new fields would need a 32-bit bridge build as well.
+- Instance matching is not exact today: L1 identity hash (geometry+material+transform), else L2 tracking
+  hash + spatial nearest neighbour (rtx_draw_call_tracker.cpp findOrCreateReplacementInstance). GC uses
+  one global lifetime (rtx.numFramesToKeepInstances) - why keep=5 ghosted moving objects.
+
+### Plan B: identity-tagged persistent instances (D3D9 path)
+- Mod: static-world draws (entity known from rmcDrawable::Draw) set render state 221/222 = game
+  identity (entity, LOD, geometry index) + lease length; vertex-animated shaders (trees/wind, water,
+  animated UVs) are not tagged.
+- Runtime patch: identity read in the D3D9 draw-state capture (next to the existing 42/149/... reads);
+  tagged draws look up their ReplacementInstance by identity (exact, no L2 search); GC keeps a tagged
+  instance alive while its lease is valid, independent of numFramesToKeepInstances (stays 1 for
+  everything else, so moving objects never ghost); identity map cleared with the tracker.
+- Mod then skips re-sending tagged, unchanged static draws, renewing the lease every K frames.
+- Risk to handle: DrawCallCache may re-bind an untouched geometry entry to a similar draw
+  (rtx_draw_call_cache.cpp) - pin entries owned by leased instances.
+
+### GPU track
+- Runtime patch 0012: GPU time per named GPU pass from Vulkan timestamps ("G" lines in
+  gta4e_profile.txt), since Tracy is compiled out. Decide cuts from measured per-pass costs
+  (BLAS builds, NRC, ray reconstruction, frame generation, volumetrics, secondary bounces).
+
+### Phase 1 success criterion (Star Junction vista + scripted drive, interleaved vs baseline)
+CS busy <= 15 ms, bridge thread <= 12 ms, render thread <= 14 ms, GPU <= 15 ms; real fps median >= 55,
+p99 frame <= 25 ms while streaming; replacement-material hits equal to baseline; screenshot diff under
+threshold at 3 fixed views; no stale instances after teleport / LOD swap.
