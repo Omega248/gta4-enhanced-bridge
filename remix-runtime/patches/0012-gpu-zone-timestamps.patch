@@ -1,0 +1,94 @@
+diff --git a/src/dxvk/dxvk_scoped_annotation.cpp b/src/dxvk/dxvk_scoped_annotation.cpp
+index c609e96..69ec877 100644
+--- a/src/dxvk/dxvk_scoped_annotation.cpp
++++ b/src/dxvk/dxvk_scoped_annotation.cpp
+@@ -24,6 +24,9 @@
+ #include "dxvk_scoped_annotation.h"
+ #include "dxvk_context.h"
+ #include "dxvk_device.h"
++#include "dxvk_gpu_query.h"
++#include <deque>
++#include <mutex>
+ #include "client/TracyProfiler.hpp"
+ 
+ // Global overload
+@@ -31,6 +34,36 @@ TRACY_OBJECT_MEMORY_PROFILING
+ 
+ namespace dxvk {
+ 
++  // gta4e: GPU time per ScopedGpuProfileZone from a pair of timestamp queries. Pairs are kept in
++  // submission order and drained (non-blocking) whenever a new zone ends; finished pairs are added to
++  // the zone profiler's GPU sites ("G" lines in rtx-remix/gta4e_profile.txt).
++  namespace {
++    struct PendingGpuZone {
++      gta4e::GpuSite* site;
++      Rc<DxvkGpuQuery> begin, end;
++    };
++    std::mutex g_gpuZoneMutex;
++    std::deque<PendingGpuZone> g_gpuZones;
++    constexpr size_t kMaxPendingGpuZones = 16384;  // results normally arrive within a few frames
++
++    void drainGpuZones(double nsPerTick) {
++      while (!g_gpuZones.empty()) {
++        auto& z = g_gpuZones.front();
++        DxvkQueryData a, b;
++        const auto sa = z.begin->getData(a);
++        const auto sb = z.end->getData(b);
++        if (sa == DxvkGpuQueryStatus::Pending || sb == DxvkGpuQueryStatus::Pending) {
++          if (g_gpuZones.size() < kMaxPendingGpuZones) break;  // oldest still in flight: stop here
++        } else if (sa == DxvkGpuQueryStatus::Available && sb == DxvkGpuQueryStatus::Available
++                && b.timestamp.time >= a.timestamp.time) {
++          z.site->ns.fetch_add(uint64_t(double(b.timestamp.time - a.timestamp.time) * nsPerTick), std::memory_order_relaxed);
++          z.site->calls.fetch_add(1, std::memory_order_relaxed);
++        }
++        g_gpuZones.pop_front();  // available, failed, or dropped because the queue is full
++      }
++    }
++  }
++
+   __ScopedAnnotation::__ScopedAnnotation(Rc<DxvkContext> ctx, const char* name) : m_ctx(ctx) {
+     VkDebugUtilsLabelEXT info = {
+       VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT, nullptr, name, { 1.0f, 0.0f, 0.0f, 1.0f } // Red color
+@@ -39,10 +72,20 @@ namespace dxvk {
+     // NV-DXVK start: Integrate Aftermath
+     m_ctx->deviceDiagnosticCheckpoint(name);
+     // NV-DXVK end
++    m_name = name;
++    m_gpuBegin = m_ctx->getDevice()->createGpuQuery(VK_QUERY_TYPE_TIMESTAMP, 0, 0);
++    m_ctx->writeTimestamp(m_gpuBegin);
+   }
+ 
+   __ScopedAnnotation::~__ScopedAnnotation() {
++    Rc<DxvkGpuQuery> gpuEnd = m_ctx->getDevice()->createGpuQuery(VK_QUERY_TYPE_TIMESTAMP, 0, 0);
++    m_ctx->writeTimestamp(gpuEnd);
+     m_ctx->endDebugLabel();
++
++    static const double nsPerTick = m_ctx->getDevice()->adapter()->deviceProperties().limits.timestampPeriod;
++    std::lock_guard<std::mutex> lock(g_gpuZoneMutex);
++    g_gpuZones.push_back({ gta4e::gpuSite(m_name), m_gpuBegin, gpuEnd });
++    drainGpuZones(nsPerTick);
+   }
+ 
+   __ScopedQueueAnnotation::__ScopedQueueAnnotation(DxvkDevice* dev, VkCommandBuffer cmdBuf, const char* name)
+diff --git a/src/dxvk/dxvk_scoped_annotation.h b/src/dxvk/dxvk_scoped_annotation.h
+index 10f2dd7..a690f0e 100644
+--- a/src/dxvk/dxvk_scoped_annotation.h
++++ b/src/dxvk/dxvk_scoped_annotation.h
+@@ -73,6 +73,7 @@ namespace dxvk {
+ 
+   class DxvkContext;
+   class DxvkDevice;
++  class DxvkGpuQuery;
+ 
+   /**
+    * A helper class to add annotation/profiler ranges as renderOps into cmd buffer.
+@@ -84,6 +85,9 @@ namespace dxvk {
+ 
+   private:
+     Rc<DxvkContext> m_ctx;
++    // gta4e: GPU timestamp at zone begin (end is written in the destructor)
++    const char* m_name = nullptr;
++    Rc<DxvkGpuQuery> m_gpuBegin;
+   };
+ 
+   class __ScopedQueueAnnotation {

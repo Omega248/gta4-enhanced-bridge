@@ -1,0 +1,211 @@
+diff --git a/src/d3d9/d3d9_rtx_utils.cpp b/src/d3d9/d3d9_rtx_utils.cpp
+index e3c42fe..054fa56 100644
+--- a/src/d3d9/d3d9_rtx_utils.cpp
++++ b/src/d3d9/d3d9_rtx_utils.cpp
+@@ -240,6 +240,8 @@ namespace dxvk {
+     materialData.remixFloatRS218FromD3D = d3d9State.renderStates[218] != 0xfefefefe ? bit::cast<float>(d3d9State.renderStates[218]) : 0.0f;
+     materialData.remixFloatRS219FromD3D = d3d9State.renderStates[219] != 0xfefefefe ? bit::cast<float>(d3d9State.renderStates[219]) : 0.0f;
+     materialData.remixHashModifierFromD3D = d3d9State.renderStates[220] != 0xfefefefe ? d3d9State.renderStates[220] : 0u;
++    materialData.gta4eIdentityRS221 = d3d9State.renderStates[221] != 0xfefefefe ? d3d9State.renderStates[221] : 0u;
++    materialData.gta4eLeaseRS222 = d3d9State.renderStates[222] != 0xfefefefe ? d3d9State.renderStates[222] : 0u;
+ 
+   }
+ 
+diff --git a/src/dxvk/rtx_render/rtx_draw_call_cache.cpp b/src/dxvk/rtx_render/rtx_draw_call_cache.cpp
+index e4de1f2..b4ff11f 100644
+--- a/src/dxvk/rtx_render/rtx_draw_call_cache.cpp
++++ b/src/dxvk/rtx_render/rtx_draw_call_cache.cpp
+@@ -47,6 +47,15 @@ DrawCallCache::DrawCallCache(DxvkDevice* device) : CommonDeviceObject(device) {
+ DrawCallCache::~DrawCallCache() {}
+ 
+ DrawCallCache::CacheState DrawCallCache::get(const DrawCallState& drawCall, BlasEntry** out) {
++  const CacheState state = getUnpinned(drawCall, out);
++  const auto& mat = drawCall.getMaterialData();
++  if (mat.gta4eIdentityRS221 != 0u && mat.gta4eLeaseRS222 != 0u && *out != nullptr) {
++    (*out)->gta4ePinnedUntilFrame = m_device->getCurrentFrameId() + mat.gta4eLeaseRS222 + 1u;
++  }
++  return state;
++}
++
++DrawCallCache::CacheState DrawCallCache::getUnpinned(const DrawCallState& drawCall, BlasEntry** out) {
+   // First, find the right bucket:
+   const XXH64_hash_t hash = drawCall.getGeometryData().getHashForRule<rules::TopologicalHash>();
+   auto range = m_entries.equal_range(hash);
+@@ -67,7 +76,8 @@ DrawCallCache::CacheState DrawCallCache::get(const DrawCallState& drawCall, Blas
+     const bool boneHashesMatch = entry.input.getSkinningState().boneHash == drawCall.getSkinningState().boneHash;
+     const bool materialHashesMatch = entry.input.getMaterialData().getHash() == drawCall.getMaterialData().getHash();
+ 
+-    if (exactMatch(drawCall, entry) || !updatedThisFrame && (vertexDataMatches && boneHashesMatch || materialHashesMatch)) {
++    const bool pinned = entry.gta4ePinnedUntilFrame > m_device->getCurrentFrameId();
++    if (exactMatch(drawCall, entry) || !updatedThisFrame && !pinned && (vertexDataMatches && boneHashesMatch || materialHashesMatch)) {
+       // Exact vertex match that is reusable for the current draw call,
+       // or something that hasn't been updated this frame and is similar enough.
+       // Matching the logic in the multi-element loop below.
+@@ -93,7 +103,8 @@ DrawCallCache::CacheState DrawCallCache::get(const DrawCallState& drawCall, Blas
+       *out = &blas;
+       return CacheState::kExisted;
+     }
+-    if (blas.frameLastTouched == m_device->getCurrentFrameId()) {
++    if (blas.frameLastTouched == m_device->getCurrentFrameId() ||
++        blas.gta4ePinnedUntilFrame > m_device->getCurrentFrameId()) {
+       continue;
+     }
+     // TODO these heuristics could use more refinement.
+diff --git a/src/dxvk/rtx_render/rtx_draw_call_cache.h b/src/dxvk/rtx_render/rtx_draw_call_cache.h
+index 61d3c88..937f268 100644
+--- a/src/dxvk/rtx_render/rtx_draw_call_cache.h
++++ b/src/dxvk/rtx_render/rtx_draw_call_cache.h
+@@ -55,6 +55,7 @@ public:
+   ~DrawCallCache();
+ 
+   CacheState get(const DrawCallState& drawCall, BlasEntry** out);
++  CacheState getUnpinned(const DrawCallState& drawCall, BlasEntry** out);
+ 
+   MultimapType& getEntries() {return m_entries;}
+ 
+diff --git a/src/dxvk/rtx_render/rtx_draw_call_tracker.cpp b/src/dxvk/rtx_render/rtx_draw_call_tracker.cpp
+index 8627f39..d9d336d 100644
+--- a/src/dxvk/rtx_render/rtx_draw_call_tracker.cpp
++++ b/src/dxvk/rtx_render/rtx_draw_call_tracker.cpp
+@@ -206,7 +206,9 @@ namespace dxvk {
+ 
+     auto l2Filter = [&](const ReplacementInstance* candidate) {
+       return candidate->frameLastSeen != currentFrameId &&
+-             candidate->materialHash == key.materialHash;
++             candidate->materialHash == key.materialHash &&
++             // gta4e: a tagged draw never takes over another tagged instance (two identical buildings)
++             !(m_gta4eTaggedLookup && candidate->gta4eIdentity != 0);
+     };
+ 
+     auto spatialMapIter = m_assetSpatialMaps.find(key.spatialMapHash);
+@@ -284,6 +286,41 @@ namespace dxvk {
+       drawCallState.getTransformData().texgenMode
+     };
+ 
++    // gta4e: game-supplied identity -> the same instance every frame, no fuzzy matching
++    const uint32_t gta4eId = drawCallState.getMaterialData().gta4eIdentityRS221;
++    if (gta4eId != 0u) {
++      ReplacementInstance* tagged = nullptr;
++      if (auto it = m_gta4eIdentityMap.find(gta4eId); it != m_gta4eIdentityMap.end()) {
++        tagged = it->second;
++        if (tagged->spatialMapHash != key.spatialMapHash) {
++          // same identity, different topology (id reused for another object): drop the old link
++          m_gta4eIdentityMap.erase(it);
++          tagged->gta4eIdentity = 0;
++          tagged->gta4eLease = 0;
++          tagged = nullptr;
++        } else if (tagged->identityHash != key.identityHash) {
++          computeDirtyFlags(tagged, key);
++          auto sm = m_assetSpatialMaps.find(key.spatialMapHash);
++          reassociateMatch(tagged, key, sm != m_assetSpatialMaps.end() ? &sm->second : nullptr);
++        } else if (tagged->frameLastSeen != m_device->getCurrentFrameId()) {
++          tagged->dirtyFlags.clr(ReplacementInstance::kLookupDriftMask);
++        }
++      }
++      if (tagged == nullptr) {
++        m_gta4eTaggedLookup = true;
++        tagged = findOrCreateReplacementInstance(key);
++        m_gta4eTaggedLookup = false;
++        if (tagged->gta4eIdentity != 0u && tagged->gta4eIdentity != gta4eId) {
++          m_gta4eIdentityMap.erase(tagged->gta4eIdentity);  // L1 exact hit owned by another id
++        }
++        tagged->gta4eIdentity = gta4eId;
++        m_gta4eIdentityMap[gta4eId] = tagged;
++      }
++      tagged->gta4eLease = drawCallState.getMaterialData().gta4eLeaseRS222;
++      GTA4E_COUNT("gta4e.tagged_draws", 1);
++      return tagged;
++    }
++
+     ReplacementInstance* result = findOrCreateReplacementInstance(key);
+ 
+     // Portal-aware matching for ViewModel draw calls: if the normal lookup created a
+@@ -362,6 +399,13 @@ namespace dxvk {
+     }
+ 
+     m_identityHashMap.erase(replacementInstance->identityHash);
++    if (replacementInstance->gta4eIdentity != 0u) {
++      auto it = m_gta4eIdentityMap.find(replacementInstance->gta4eIdentity);
++      if (it != m_gta4eIdentityMap.end() && it->second == replacementInstance) {
++        m_gta4eIdentityMap.erase(it);
++      }
++      replacementInstance->gta4eIdentity = 0;
++    }
+ 
+     eraseFromSpatialMap(m_assetSpatialMaps, replacementInstance->spatialMapHash,
+         replacementInstance->spatialCacheTransformHash, replacementInstance);
+@@ -389,7 +433,12 @@ namespace dxvk {
+       const bool hasLights = replacementInstance->lightBoundingBox.isValid();
+       const bool hasMeshes = replacementInstance->geometryBoundingBox.isValid();
+ 
+-      if (replacementInstance->frameLastSeen + numFramesToKeepObjects <= currentFrame) {
++      // gta4e: a leased instance (game identity) lives for its lease even when the game skips it
++      const uint32_t keepFrames = std::max(numFramesToKeepObjects, replacementInstance->gta4eLease);
++      if (replacementInstance->frameLastSeen + keepFrames <= currentFrame) {
++        if (replacementInstance->gta4eLease != 0u) {
++          GTA4E_COUNT("gta4e.lease_expired", 1);
++        }
+         bool keepAlive = false;
+ 
+         // Only anti-cull RIs that have been matched at least once after creation.
+@@ -461,6 +510,7 @@ namespace dxvk {
+ 
+   void DrawCallTracker::clear() {
+     m_identityHashMap.clear();
++    m_gta4eIdentityMap.clear();
+     m_assetSpatialMaps.clear();
+     m_replacementInstances.clear();
+   }
+diff --git a/src/dxvk/rtx_render/rtx_draw_call_tracker.h b/src/dxvk/rtx_render/rtx_draw_call_tracker.h
+index 7f5e7ac..6a68cdb 100644
+--- a/src/dxvk/rtx_render/rtx_draw_call_tracker.h
++++ b/src/dxvk/rtx_render/rtx_draw_call_tracker.h
+@@ -104,6 +104,9 @@ private:
+   DxvkDevice* m_device;
+ 
+   std::unordered_map<XXH64_hash_t, ReplacementInstance*> m_identityHashMap;
++  // gta4e: game identity (render state 221) -> instance; set while a tagged draw is being looked up
++  std::unordered_map<uint32_t, ReplacementInstance*> m_gta4eIdentityMap;
++  bool m_gta4eTaggedLookup = false;
+ 
+   using ReplacementSpatialMap = SpatialMap<ReplacementInstance>;
+   std::unordered_map<XXH64_hash_t, ReplacementSpatialMap> m_assetSpatialMaps;
+diff --git a/src/dxvk/rtx_render/rtx_materials.h b/src/dxvk/rtx_render/rtx_materials.h
+index 3c806f6..5242e85 100644
+--- a/src/dxvk/rtx_render/rtx_materials.h
++++ b/src/dxvk/rtx_render/rtx_materials.h
+@@ -2038,6 +2038,10 @@ struct LegacyMaterialData {
+   float remixFloatRS218FromD3D = 0.0f; // RS 218
+   float remixFloatRS219FromD3D = 0.0f; // RS 219
+   uint32_t remixHashModifierFromD3D = 0u; // RS 220
++  // gta4e: game-supplied instance identity (RS 221, 0 = none) and lease in frames (RS 222).
++  // Not part of the material hash: they only steer instance tracking and GC.
++  uint32_t gta4eIdentityRS221 = 0u;
++  uint32_t gta4eLeaseRS222 = 0u;
+ 
+   void setHashOverride(XXH64_hash_t hash) {
+     m_cachedHash = hash;
+diff --git a/src/dxvk/rtx_render/rtx_types.h b/src/dxvk/rtx_render/rtx_types.h
+index faa3a96..41d4edb 100644
+--- a/src/dxvk/rtx_render/rtx_types.h
++++ b/src/dxvk/rtx_render/rtx_types.h
+@@ -198,6 +198,9 @@ struct ReplacementInstance {
+   Vector3 centroid = Vector3(0.f);
+   uint32_t frameCreated = 0;
+   uint32_t frameLastSeen = 0;
++  // gta4e: game identity (0 = untracked) and lease; a leased instance survives GC without being redrawn
++  uint32_t gta4eIdentity = 0;
++  uint32_t gta4eLease = 0;
+   XXH64_hash_t spatialCacheTransformHash = kEmptyHash;
+ 
+   // Pointer to the replacement data this RI was set up with. Used to detect when
+@@ -913,6 +916,9 @@ struct PooledBlas : public RcObject {
+ 
+ // Information about a geometry, such as vertex buffers, and possibly a static BLAS for that geometry
+ struct BlasEntry {
++  // gta4e: while a leased (game-identity) instance may be skipped by the game, its geometry entry must
++  // not be handed to a merely similar draw. Only exact matches may reuse it until this frame.
++  uint32_t gta4ePinnedUntilFrame = 0;
+   // input contains legacy or replacements (the data can be on CPU or GPU)
+   //  - Data on CPU is guaranteed to be alive during draw call's submission.
+   //  - Data can be made alive on CPU for longer with an explicit ref hold on it
