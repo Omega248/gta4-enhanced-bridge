@@ -12,6 +12,8 @@
 #include "d3d9_stats.hpp"
 #include "xform_cache.hpp"
 #include "dedupe_device.hpp"
+#include "scene_probe.hpp"
+#include "shared/common/flags.hpp"
 #include "comp_settings.hpp"
 #include "natives.hpp"
 #include "remix_vars.hpp"
@@ -399,6 +401,7 @@ namespace gta4
 			j += ",\"vs_draws\":" + vs_stats::take_json(static_cast<double>(m_frame - last_frame));
 			j += ",\"near_dupes\":" + dedupe_device::near_json(static_cast<double>(m_frame - last_frame));
 			j += ",\"d3d\":" + d3d9_stats::take_json(wall);
+			if (scene_probe::enabled()) j += ",\"scene\":" + scene_probe::take_json();
 			last = now; last_frame = m_frame;
 		}
 		j += "}\n";
@@ -625,6 +628,14 @@ namespace gta4
 				results += std::string(results.empty() ? "" : ",") + "\"" + json_escape(k) + "\":" + (ok ? "true" : "false");
 			}
 			reply(c, all_ok, "\"set\":{" + results + "}");
+			return true;
+		}
+
+		if (cmd == "probe")
+		{
+			// scene probe (docs/SCENE_SUBMISSION.md phase 0): on=0/1; needs the debug_model_hash hooks for entity data
+			scene_probe::set_enabled(i(c, "on", 1) != 0);
+			reply(c, true, std::string("\"on\":") + (scene_probe::enabled() ? "true" : "false") + ",\"entity_hooks\":" + (shared::common::flags::has_flag("debug_model_hash") ? "true" : "false"));
 			return true;
 		}
 

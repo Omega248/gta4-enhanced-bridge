@@ -51,6 +51,29 @@ namespace shared::common
 
 				LocalFree(argv);
 			}
+
+			// also read flags from gta4e_flags.txt next to the exe (one per line, '-' optional): the Rockstar
+			// launcher starts the game itself, so command-line flags do not always reach it
+			char exe[MAX_PATH]{};
+			if (GetModuleFileNameA(nullptr, exe, MAX_PATH))
+			{
+				std::string path(exe);
+				path = path.substr(0, path.find_last_of("\\/") + 1) + "gta4e_flags.txt";
+				if (FILE* fp = nullptr; fopen_s(&fp, path.c_str(), "r") == 0 && fp)
+				{
+					char line[256];
+					while (fgets(line, sizeof(line), fp))
+					{
+						std::string s(line);
+						while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+						if (!s.empty() && s[0] == '-') s.erase(s.begin());
+						if (s.empty() || s[0] == '#') continue;
+						shared::common::log("Flags", std::format("Found flag (gta4e_flags.txt): {}", s), shared::common::LOG_TYPE::LOG_TYPE_STATUS, true);
+						m_enabled_flags.emplace_back(std::move(s));
+					}
+					fclose(fp);
+				}
+			}
 		}
 	}
 }

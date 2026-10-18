@@ -4,6 +4,7 @@
 #include "imgui.hpp"
 #include "renderer.hpp"
 #include "d3d9_stats.hpp"
+#include "scene_probe.hpp"
 #include "xform_cache.hpp"
 #include "dedupe_device.hpp"
 #include "remix_vars.hpp"
@@ -315,6 +316,7 @@ namespace gta4
 		}
 
 		d3d9_stats::on_end_scene();
+		scene_probe::on_end_scene();
 		return hr;
 	}
 

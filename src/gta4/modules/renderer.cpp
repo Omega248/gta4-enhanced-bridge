@@ -2,6 +2,7 @@
 #include "vs_stats.hpp"
 #include "xform_cache.hpp"
 #include "renderer.hpp"
+#include "scene_probe.hpp"
 
 #include "comp_settings.hpp"
 #include "imgui.hpp"
@@ -45,6 +46,7 @@ namespace gta4
 
 	std::uint32_t g_model_hash = 0u;
 	std::uint32_t g_model_reference = 0u;
+	game::CEntity* g_model_entity = nullptr; // entity being drawn on the static-world path (debug_model_hash hooks)
 
 	namespace tex_addons
 	{
@@ -1801,6 +1803,12 @@ namespace gta4
 		GTA4_PERF_SCOPE(performance_section::DrawIndexedPrim);
 
 		auto& ctx = setup_context(dev);
+		if (scene_probe::enabled())
+		{
+			const auto* ent = g_model_entity;
+			scene_probe::on_draw(dev, ent, g_model_hash, ent ? (static_cast<std::uint32_t>(ent->m_dwFlags2) & 0x3C0u) >> 6 : 0u,
+				ent && (ent->m_dwFlags & 0x4), ctx.info.shader_name, startIndex, primCount);
+		}
 		static auto im = imgui::get();
 		static auto gs = comp_settings::get();
 
@@ -3590,6 +3598,7 @@ namespace gta4
 	void clear_global_model_hash()
 	{
 		g_model_hash = 0u;
+		g_model_entity = nullptr;
 	}
 
 	// check if CEntity args and assign global
@@ -3603,6 +3612,7 @@ namespace gta4
 			{
 				g_model_hash = basemodel->m_dwModel;
 				g_model_reference = ent->m_pReference01;
+				g_model_entity = ent;
 			}
 
 			return 1;
