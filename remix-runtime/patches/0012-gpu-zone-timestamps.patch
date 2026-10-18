@@ -1,5 +1,5 @@
 diff --git a/src/dxvk/dxvk_scoped_annotation.cpp b/src/dxvk/dxvk_scoped_annotation.cpp
-index c609e96..69ec877 100644
+index c609e96..3302bc1 100644
 --- a/src/dxvk/dxvk_scoped_annotation.cpp
 +++ b/src/dxvk/dxvk_scoped_annotation.cpp
 @@ -24,6 +24,9 @@
@@ -7,12 +7,12 @@ index c609e96..69ec877 100644
  #include "dxvk_context.h"
  #include "dxvk_device.h"
 +#include "dxvk_gpu_query.h"
-+#include <deque>
++#include <vector>
 +#include <mutex>
  #include "client/TracyProfiler.hpp"
  
  // Global overload
-@@ -31,6 +34,36 @@ TRACY_OBJECT_MEMORY_PROFILING
+@@ -31,6 +34,44 @@ TRACY_OBJECT_MEMORY_PROFILING
  
  namespace dxvk {
  
@@ -23,33 +23,41 @@ index c609e96..69ec877 100644
 +    struct PendingGpuZone {
 +      gta4e::GpuSite* site;
 +      Rc<DxvkGpuQuery> begin, end;
++      uint64_t pushedAt;  // zone-end counter when queued
 +    };
 +    std::mutex g_gpuZoneMutex;
-+    std::deque<PendingGpuZone> g_gpuZones;
-+    constexpr size_t kMaxPendingGpuZones = 16384;  // results normally arrive within a few frames
++    std::vector<PendingGpuZone> g_gpuZones;
++    uint64_t g_gpuZoneCounter = 0;
++    constexpr uint64_t kGpuZoneMaxAge = 4096;  // zone ends (~40+ frames); older pairs are dropped
 +
++    // Collects every finished pair, wherever it is in the list; runs every 32 zone ends.
 +    void drainGpuZones(double nsPerTick) {
-+      while (!g_gpuZones.empty()) {
-+        auto& z = g_gpuZones.front();
++      size_t keep = 0;
++      for (size_t i = 0; i < g_gpuZones.size(); ++i) {
++        auto& z = g_gpuZones[i];
 +        DxvkQueryData a, b;
 +        const auto sa = z.begin->getData(a);
 +        const auto sb = z.end->getData(b);
-+        if (sa == DxvkGpuQueryStatus::Pending || sb == DxvkGpuQueryStatus::Pending) {
-+          if (g_gpuZones.size() < kMaxPendingGpuZones) break;  // oldest still in flight: stop here
-+        } else if (sa == DxvkGpuQueryStatus::Available && sb == DxvkGpuQueryStatus::Available
-+                && b.timestamp.time >= a.timestamp.time) {
++        const bool pending = sa == DxvkGpuQueryStatus::Pending || sb == DxvkGpuQueryStatus::Pending;
++        if (pending && g_gpuZoneCounter - z.pushedAt < kGpuZoneMaxAge) {
++          if (keep != i) g_gpuZones[keep] = std::move(z);
++          ++keep;
++          continue;
++        }
++        if (sa == DxvkGpuQueryStatus::Available && sb == DxvkGpuQueryStatus::Available
++         && b.timestamp.time >= a.timestamp.time) {
 +          z.site->ns.fetch_add(uint64_t(double(b.timestamp.time - a.timestamp.time) * nsPerTick), std::memory_order_relaxed);
 +          z.site->calls.fetch_add(1, std::memory_order_relaxed);
 +        }
-+        g_gpuZones.pop_front();  // available, failed, or dropped because the queue is full
 +      }
++      g_gpuZones.resize(keep);
 +    }
 +  }
 +
    __ScopedAnnotation::__ScopedAnnotation(Rc<DxvkContext> ctx, const char* name) : m_ctx(ctx) {
      VkDebugUtilsLabelEXT info = {
        VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT, nullptr, name, { 1.0f, 0.0f, 0.0f, 1.0f } // Red color
-@@ -39,10 +72,20 @@ namespace dxvk {
+@@ -39,10 +80,22 @@ namespace dxvk {
      // NV-DXVK start: Integrate Aftermath
      m_ctx->deviceDiagnosticCheckpoint(name);
      // NV-DXVK end
@@ -65,8 +73,10 @@ index c609e96..69ec877 100644
 +
 +    static const double nsPerTick = m_ctx->getDevice()->adapter()->deviceProperties().limits.timestampPeriod;
 +    std::lock_guard<std::mutex> lock(g_gpuZoneMutex);
-+    g_gpuZones.push_back({ gta4e::gpuSite(m_name), m_gpuBegin, gpuEnd });
-+    drainGpuZones(nsPerTick);
++    g_gpuZones.push_back({ gta4e::gpuSite(m_name), m_gpuBegin, gpuEnd, ++g_gpuZoneCounter });
++    if ((g_gpuZoneCounter & 31u) == 0u) {
++      drainGpuZones(nsPerTick);
++    }
    }
  
    __ScopedQueueAnnotation::__ScopedQueueAnnotation(DxvkDevice* dev, VkCommandBuffer cmdBuf, const char* name)
