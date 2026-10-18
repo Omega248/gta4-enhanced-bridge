@@ -1034,6 +1034,10 @@ namespace gta4
 		dedupe_device::g_retain = k > 1;
 	}
 
+	int claude_bridge::retain_k() { return dedupe_device::g_retain.load(std::memory_order_relaxed) ? dedupe_device::g_retain_k.load(std::memory_order_relaxed) : 0; }
+
+	void claude_bridge::set_retain_gate(bool allow) { dedupe_device::g_retain_gate = allow; }
+
 	bool claude_bridge_screenshot_bmp(const std::filesystem::path& out, int& w, int& h) { return screenshot_bmp(out, w, h); }
 
 	bool claude_bridge::post_commands(const std::string& lines)

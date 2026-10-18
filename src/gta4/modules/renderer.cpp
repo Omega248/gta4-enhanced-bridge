@@ -3,6 +3,7 @@
 #include "xform_cache.hpp"
 #include "renderer.hpp"
 #include "scene_probe.hpp"
+#include "claude_bridge.hpp"
 
 #include "comp_settings.hpp"
 #include "imgui.hpp"
@@ -1808,6 +1809,36 @@ namespace gta4
 			const auto* ent = g_model_entity;
 			scene_probe::on_draw(dev, ent, g_model_hash, ent ? (static_cast<std::uint32_t>(ent->m_dwFlags2) & 0x3C0u) >> 6 : 0u,
 				ent && (ent->m_dwFlags & 0x4), ctx.info.shader_name, startIndex, primCount);
+		}
+
+		// persistent static world (docs/SCENE_SUBMISSION.md, plan B): static-world draws carry a stable
+		// game identity (RS 221) and a lease (RS 222) so the runtime matches them exactly and keeps their
+		// instance alive while retain skips them. Vertex-animated shaders are tagged but never skipped.
+		struct retain_gate_reset { ~retain_gate_reset() { claude_bridge::set_retain_gate(false); } } _retain_gate_reset;
+		if (const auto* ent = g_model_entity; ent)
+		{
+			if (const int k = claude_bridge::retain_k(); k > 1)
+			{
+				IDirect3DVertexBuffer9* vb = nullptr; UINT vb_off = 0, vb_stride = 0; dev->GetStreamSource(0, &vb, &vb_off, &vb_stride);
+				IDirect3DIndexBuffer9* ib = nullptr; dev->GetIndices(&ib);
+				const std::uintptr_t parts[6] = { reinterpret_cast<std::uintptr_t>(ent), reinterpret_cast<std::uintptr_t>(vb), reinterpret_cast<std::uintptr_t>(ib), vb_off, startIndex, primCount };
+				if (vb) vb->Release();
+				if (ib) ib->Release();
+				std::uint32_t id = 2166136261u;
+				for (const auto v : parts) { id = (id ^ static_cast<std::uint32_t>(v)) * 16777619u; }
+				id |= 1u; // 0 means "untagged"
+
+				ctx.save_rs(dev, 221u); dev->SetRenderState(static_cast<D3DRENDERSTATETYPE>(221), id);
+				ctx.save_rs(dev, 222u); dev->SetRenderState(static_cast<D3DRENDERSTATETYPE>(222), static_cast<DWORD>(k + 2));
+
+				const auto& sn = ctx.info.shader_name;
+				const bool vertex_animated = sn.find("trees") != std::string_view::npos || sn.find("grass") != std::string_view::npos
+					|| sn.find("wind") != std::string_view::npos || sn.find("water") != std::string_view::npos
+					|| sn.find("ped") != std::string_view::npos || sn.find("vehicle") != std::string_view::npos
+					|| sn.find("ptfx") != std::string_view::npos || sn.find("hair") != std::string_view::npos
+					|| sn.find("cloth") != std::string_view::npos;
+				claude_bridge::set_retain_gate(!vertex_animated);
+			}
 		}
 		static auto im = imgui::get();
 		static auto gs = comp_settings::get();

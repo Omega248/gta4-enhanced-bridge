@@ -68,6 +68,9 @@ namespace gta4
 		static inline std::atomic<bool> g_retain{ false };
 		static inline std::atomic<int> g_retain_k{ 4 };
 		static inline std::atomic<bool> g_retain_shaders{ false };
+		// set by the renderer for the draw it is about to issue: a static-world draw tagged with a game
+		// identity (RS 221/222) whose shader has no vertex animation. Only these may be skipped.
+		static inline thread_local bool g_retain_gate = false;
 		static inline std::atomic<std::uint64_t> g_retain_skipped{ 0 }, g_retain_sent_static{ 0 }, g_retain_sent_other{ 0 };
 		static inline std::atomic<std::uint32_t> g_retain_tracked{ 0 };
 		static std::string retain_json(double frames)
@@ -618,6 +621,7 @@ namespace gta4
 		bool retain_skip(INT base, UINT minv, UINT numv, UINT start, UINT prims)
 		{
 			const auto other = [] { g_retain_sent_other.fetch_add(1, std::memory_order_relaxed); return false; };
+			if (!g_retain_gate) return other();   // untagged or vertex-animated: always sent
 			struct rel { IUnknown* p = nullptr; ~rel() { if (p) p->Release(); } };
 
 			IDirect3DVertexShader9* vs = nullptr; m_real->GetVertexShader(&vs); rel r_vs{ vs };
