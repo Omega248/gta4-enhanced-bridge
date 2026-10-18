@@ -67,6 +67,34 @@ namespace gta4e {
     return t;
   }
 
+  // GPU time per named GPU zone (ScopedGpuProfileZone), measured with Vulkan timestamp queries in
+  // dxvk_scoped_annotation.cpp and accumulated here once the results are available ("G" lines).
+  struct GpuSite {
+    const char* name;
+    std::atomic<uint64_t> ns { 0 };
+    std::atomic<uint64_t> calls { 0 };
+    uint64_t lastNs = 0, lastCalls = 0;
+  };
+
+  struct GpuRegistry {
+    std::mutex mtx;
+    std::vector<GpuSite*> sites;
+    static GpuRegistry& get() { static GpuRegistry r; return r; }
+  };
+
+  // sites are keyed by the zone's string literal; the same text at two call sites shares a site
+  inline GpuSite* gpuSite(const char* name) {
+    auto& r = GpuRegistry::get();
+    std::lock_guard<std::mutex> lock(r.mtx);
+    for (auto* s : r.sites) {
+      if (s->name == name || std::strcmp(s->name, name) == 0) return s;
+    }
+    auto* s = new GpuSite();  // lives for the process, like the CPU zone sites
+    s->name = name;
+    r.sites.push_back(s);
+    return s;
+  }
+
   inline void writerThread();
 
   inline void ensureStarted() {
@@ -173,6 +201,24 @@ namespace gta4e {
       fprintf(f, "# zones: inclusive ms per frame, calls per frame\n");
       for (size_t i = 0; i < rows.size() && i < 120; ++i)
         fprintf(f, "Z %-60s %9.3f %10.1f\n", rows[i].name, rows[i].ms / frames, double(rows[i].calls) / frames);
+
+      // GPU zones: GPU execution time from timestamps (inclusive of nested GPU zones), ms per frame
+      {
+        auto& g = GpuRegistry::get();
+        std::vector<GpuSite*> gsites;
+        { std::lock_guard<std::mutex> lock(g.mtx); gsites = g.sites; }
+        std::vector<Row> grows;
+        for (auto* s : gsites) {
+          const uint64_t n = s->ns.load(), c = s->calls.load();
+          const uint64_t dn = n - s->lastNs, dc = c - s->lastCalls;
+          s->lastNs = n; s->lastCalls = c;
+          if (dc) grows.push_back({ s->name, double(dn) / 1.0e6, dc });
+        }
+        std::sort(grows.begin(), grows.end(), [](const Row& a, const Row& b) { return a.ms > b.ms; });
+        fprintf(f, "# gpu zones: GPU ms per frame (inclusive), passes per frame\n");
+        for (size_t i = 0; i < grows.size() && i < 80; ++i)
+          fprintf(f, "G %-60s %9.3f %10.1f\n", grows[i].name, grows[i].ms / frames, double(grows[i].calls) / frames);
+      }
 
       // per thread: exclusive zone time (ms per frame), busiest threads first, top zones of each
       struct Excl { const char* name; double ms; uint64_t calls; };
